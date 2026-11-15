@@ -22,6 +22,9 @@ let midiVolume = 0.5;
 let pcmVolume = 0.5;
 let audioReady: Promise<AudioState | null> | undefined;
 
+// Where the synthesizer files live: the page's folder on the site, the script's folder for the embeddable player.
+const assetBase = (): string => (globalThis as { wieAssetBase?: string }).wieAssetBase ?? "";
+
 async function initAudio(ctx: AudioContext): Promise<AudioState> {
   const midiGain = ctx.createGain();
   midiGain.gain.value = midiVolume;
@@ -33,9 +36,9 @@ async function initAudio(ctx: AudioContext): Promise<AudioState> {
 
   let synth: WorkletSynthesizer | null = null;
   try {
-    await ctx.audioWorklet.addModule("/spessasynth_processor.min.js");
+    await ctx.audioWorklet.addModule(assetBase() + "spessasynth_processor.min.js");
     synth = new WorkletSynthesizer(ctx);
-    const buffer = await fetch("1mgm.sf2").then(response => response.arrayBuffer());
+    const buffer = await fetch(assetBase() + "1mgm.sf2").then(response => response.arrayBuffer());
     await synth.soundBankManager.addSoundBank(buffer, "main");
     await synth.isReady;
     synth.connect(midiGain);
@@ -69,7 +72,7 @@ export function setPcmVolume(value: number): void {
 }
 
 export class AudioPlayer {
-  private readonly worker = new Worker(new URL("./audio-worker.ts", import.meta.url), { type: "module" });
+  private readonly worker = new Worker(/* webpackChunkName: "audio-worker" */ new URL("./audio-worker.ts", import.meta.url), { type: "module" });
   private ctx?: AudioContext;
   private readonly audioReady = Promise.resolve()
     .then(() => {
