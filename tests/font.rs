@@ -46,7 +46,7 @@ fn injected_font_preserves_metrics_and_rasterization() {
     for font in [&static_font, &owned_font] {
         assert_eq!(string_width(font, "Hello, WIE!", 10.0), 73.333336);
         assert_eq!(string_width(font, "가나다", 10.0), 40.0);
-        assert_eq!(raster_hash(font), 0x1026f6f7ab03dc46);
+        assert_eq!(raster_hash(font), 0xa0d32ee5baf7840a);
     }
 }
 

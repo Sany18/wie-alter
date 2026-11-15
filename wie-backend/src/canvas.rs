@@ -379,14 +379,22 @@ where
             return;
         }
 
+        if color.a == 0 {
+            return;
+        }
+
+        // Source-over compositing, so drawing onto a transparent image keeps its transparent pixels.
         let bg = self.image_buffer.get_pixel(x, y);
-        let factor = color.a as f32 / 255.0;
+        let src_a = color.a as f32 / 255.0;
+        let dst_a = bg.a as f32 / 255.0 * (1.0 - src_a);
+        let out_a = src_a + dst_a;
+        let mix = |src: u8, dst: u8| ((src as f32 * src_a + dst as f32 * dst_a) / out_a + 0.5) as u8;
 
         let computed_color = Color {
-            a: 0xff,
-            r: (color.r as f32 * factor + bg.r as f32 * (1.0 - factor)) as u8,
-            g: (color.g as f32 * factor + bg.g as f32 * (1.0 - factor)) as u8,
-            b: (color.b as f32 * factor + bg.b as f32 * (1.0 - factor)) as u8,
+            a: (out_a * 255.0 + 0.5) as u8,
+            r: mix(color.r, bg.r),
+            g: mix(color.g, bg.g),
+            b: mix(color.b, bg.b),
         };
 
         self.image_buffer.put_pixel(x, y, computed_color);
@@ -1338,6 +1346,50 @@ mod tests {
                 },
             );
         }
+    }
+
+    #[test]
+    fn test_draw_onto_transparent_image_keeps_alpha() {
+        let clear = Color { a: 0, r: 0, g: 0, b: 0 };
+        let red = Color { a: 255, r: 255, g: 0, b: 0 };
+        let half_blue = Color { a: 128, r: 0, g: 0, b: 255 };
+
+        let mut src = VecImageBuffer::<ArgbPixel>::new(3, 1);
+        src.put_pixel(0, 0, clear);
+        src.put_pixel(1, 0, red);
+        src.put_pixel(2, 0, half_blue);
+
+        let mut canvas = ImageBufferCanvas::new(VecImageBuffer::<ArgbPixel>::new(3, 1));
+        canvas.draw(0, 0, 3, 1, &src, 0, 0, full_clip(3));
+
+        assert_color(canvas.image(), 0, 0, clear);
+        assert_color(canvas.image(), 1, 0, red);
+        assert_color(canvas.image(), 2, 0, half_blue);
+
+        // Over an opaque background the result stays opaque and mixes the colors.
+        canvas.put_pixel(
+            2,
+            0,
+            Color {
+                a: 255,
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+            full_clip(3),
+        );
+        canvas.draw(2, 0, 1, 1, &src, 2, 0, full_clip(3));
+        assert_color(
+            canvas.image(),
+            2,
+            0,
+            Color {
+                a: 255,
+                r: 127,
+                g: 127,
+                b: 255,
+            },
+        );
     }
 
     #[test]
