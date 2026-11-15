@@ -457,7 +457,8 @@ impl ChoiceGroup {
                 .await?;
         }
 
-        let control_on_left = !popup_closed;
+        // IMPLICIT (3) is only used internally by List, which shows plain rows without indicators.
+        let control_on_left = !popup_closed && choice_type != 3;
         if control_on_left {
             let indicator_x = x;
             let indicator_y = y + (height - INDICATOR_SIZE) / 2;
