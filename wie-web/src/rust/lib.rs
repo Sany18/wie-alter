@@ -242,10 +242,10 @@ impl WieWeb {
     }
 
     pub fn update(&mut self) -> Result<(), JsError> {
-        if self.should_redraw.load(Ordering::SeqCst) {
-            self.emulator.handle_event(Event::Redraw);
-            self.should_redraw.store(false, Ordering::SeqCst)
-        }
+        // Every animation frame is a display refresh: a repaint the app requested (setCurrent, repaint) shows now
+        // instead of waiting for the next input event. The queue merges redraws and paints only pending requests.
+        self.should_redraw.store(false, Ordering::SeqCst);
+        self.emulator.handle_event(Event::Redraw);
 
         let millis = self.host.as_ref().map_or_else(js_sys::Date::now, WasmHost::now);
 
