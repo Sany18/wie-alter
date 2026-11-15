@@ -499,6 +499,9 @@ svg {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  /* Keep pixel art sharp when the small phone screen is scaled up. */
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
   background: var(--card-bg);
 }
 
