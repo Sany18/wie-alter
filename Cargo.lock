@@ -7968,6 +7968,7 @@ dependencies = [
  "jvm-types",
  "test-utils",
  "tracing",
+ "wie-backend",
  "wie-jvm-support",
  "wie-midp",
 ]

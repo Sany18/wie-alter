@@ -2,6 +2,7 @@
 extern crate alloc;
 
 pub mod classes;
+mod ringtone;
 
 use wie_jvm_support::WieJavaClassProto;
 

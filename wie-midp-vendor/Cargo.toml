@@ -13,6 +13,7 @@ jvm = { workspace = true }
 jvm-class-proto = { workspace = true }
 jvm-types = { workspace = true }
 
+wie-backend = { workspace = true }
 wie-jvm-support = { workspace = true }
 wie-midp = { workspace = true }
 

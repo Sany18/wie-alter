@@ -27,13 +27,17 @@ impl Audio {
     }
 
     pub fn load_smaf(&mut self, data: &[u8]) -> Result<AudioHandle, AudioError> {
+        Ok(self.load_sequence(convert_smaf_events(parse_smaf(data))))
+    }
+
+    // A sequence the caller has already rendered (synthesized tones, for one).
+    pub fn load_sequence(&mut self, sequence: AudioSequence) -> AudioHandle {
         let audio_handle = self.last_audio_handle;
-        let sequence = Arc::new(convert_smaf_events(parse_smaf(data)));
 
         self.last_audio_handle += 1;
-        self.files.insert(audio_handle, sequence);
+        self.files.insert(audio_handle, Arc::new(sequence));
 
-        Ok(audio_handle)
+        audio_handle
     }
 
     pub fn play(&mut self, audio_handle: AudioHandle, repeat: bool) -> Result<u64, AudioError> {
