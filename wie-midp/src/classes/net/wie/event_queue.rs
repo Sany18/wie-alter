@@ -85,6 +85,33 @@ pub enum MIDPKeyCode {
     KEY_STAR = 42,  // *
 }
 
+// Nokia's fixed key codes for the shared MIDP event codes: (com.nokia.mid.ui.FullCanvas field, MIDP code, Nokia code).
+pub const NOKIA_KEY_CODES: [(&str, i32, i32); 9] = [
+    ("KEY_UP_ARROW", MIDPKeyCode::UP as i32, -1),
+    ("KEY_DOWN_ARROW", MIDPKeyCode::DOWN as i32, -2),
+    ("KEY_LEFT_ARROW", MIDPKeyCode::LEFT as i32, -3),
+    ("KEY_RIGHT_ARROW", MIDPKeyCode::RIGHT as i32, -4),
+    ("KEY_SOFTKEY3", MIDPKeyCode::FIRE as i32, -5),
+    ("KEY_SOFTKEY1", MIDPKeyCode::LEFT_SOFT_KEY as i32, -6),
+    ("KEY_SOFTKEY2", MIDPKeyCode::RIGHT_SOFT_KEY as i32, -7),
+    ("KEY_SEND", MIDPKeyCode::CALL as i32, -10),
+    ("KEY_END", MIDPKeyCode::HANGUP as i32, -11),
+];
+
+pub fn to_nokia_key_code(code: i32) -> i32 {
+    NOKIA_KEY_CODES
+        .iter()
+        .find_map(|(_, midp, nokia)| (*midp == code).then_some(*nokia))
+        .unwrap_or(code)
+}
+
+pub fn from_nokia_key_code(code: i32) -> i32 {
+    NOKIA_KEY_CODES
+        .iter()
+        .find_map(|(_, midp, nokia)| (*nokia == code).then_some(*midp))
+        .unwrap_or(code)
+}
+
 impl MIDPKeyCode {
     pub fn from_raw(raw: i32) -> Option<Self> {
         Some(match raw {

@@ -4,6 +4,7 @@ use alloc::{
     collections::btree_map::BTreeMap,
     format, str,
     string::{String, ToString},
+    vec,
     vec::Vec,
 };
 
@@ -12,6 +13,45 @@ use jvm::{Result as JvmResult, runtime::JavaLangString};
 use wie_backend::{DefaultTaskRunner, Emulator, Event, Platform, System, extract_zip};
 use wie_jvm_support::{JvmSupport, RustJavaJvmImplementation};
 use wie_util::{Result, WieError};
+
+// Vendor classes a jar may replace with its own (see load()).
+const REPLACEABLE: [&str; 1] = ["com/nokia/mid/ui/FullCanvas"];
+
+// The super class of a class file: walks the constant pool to access_flags, this_class, super_class.
+fn super_class_name(class: &[u8]) -> Option<String> {
+    let u16_at = |at: usize| Some(u16::from_be_bytes([*class.get(at)?, *class.get(at + 1)?]));
+    if class.get(0..4)? != [0xca, 0xfe, 0xba, 0xbe] {
+        return None;
+    }
+    let count = u16_at(8)? as usize;
+    let mut entries: Vec<(u8, usize)> = vec![(0, 0); count];
+    let mut at = 10;
+    let mut index = 1;
+    while index < count {
+        let tag = *class.get(at)?;
+        entries[index] = (tag, at);
+        at += 1 + match tag {
+            1 => 2 + u16_at(at + 1)? as usize,
+            7 | 8 | 16 | 19 | 20 => 2,
+            15 => 3,
+            3 | 4 | 9 | 10 | 11 | 12 | 17 | 18 => 4,
+            5 | 6 => 8,
+            _ => return None,
+        };
+        index += if tag == 5 || tag == 6 { 2 } else { 1 };
+    }
+    let super_index = u16_at(at + 4)? as usize;
+    let (tag, offset) = *entries.get(super_index)?;
+    if tag != 7 {
+        return None;
+    }
+    let (tag, offset) = *entries.get(u16_at(offset + 1)? as usize)?;
+    if tag != 1 {
+        return None;
+    }
+    let length = u16_at(offset + 1)? as usize;
+    str::from_utf8(class.get(offset + 3..offset + 3 + length)?).ok().map(ToString::to_string)
+}
 
 pub struct J2MEEmulator {
     system: System,
@@ -66,16 +106,50 @@ impl J2MEEmulator {
             system.filesystem().add_virtual(path, data.clone());
         }
 
+        // A game converted for another phone may ship its own com.nokia.mid.ui.FullCanvas built on that phone's API
+        // (a Motorola canvas whose keyPressed feeds the game's KEYPRESSED). On such a phone the jar's class is the one
+        // that runs; ours would cut the game off from its keys. A FullCanvas straight on Canvas is only a full-screen
+        // shim: ours does the same and more, so it stays.
+        let replaced = files
+            .get(jar_filename)
+            .and_then(|jar| extract_zip(jar).ok())
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|(path, data)| {
+                        let name = path.strip_suffix(".class")?;
+                        let parent = super_class_name(data)?;
+                        (REPLACEABLE.contains(&name) && parent != "javax/microedition/lcdui/Canvas").then(|| name.to_string())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         let mut system_clone = system.clone();
         let jar_filename = jar_filename.to_owned();
 
-        system.spawn(async move || Self::do_start(&mut system_clone, jar_filename, descriptor.properties, descriptor.main_class_name).await);
+        system.spawn(async move || {
+            Self::do_start(
+                &mut system_clone,
+                jar_filename,
+                descriptor.properties,
+                descriptor.main_class_name,
+                replaced,
+            )
+            .await
+        });
 
         Ok(J2MEEmulator { system })
     }
 
     #[tracing::instrument(name = "start", skip_all)]
-    async fn do_start(system: &mut System, jar_filename: String, properties: BTreeMap<String, String>, main_class_name: String) -> Result<()> {
+    async fn do_start(
+        system: &mut System,
+        jar_filename: String,
+        properties: BTreeMap<String, String>,
+        main_class_name: String,
+        replaced: Vec<String>,
+    ) -> Result<()> {
         let properties = properties
             .into_iter()
             .map(|(k, v)| (format!("wie.appProperty.{k}"), v))
@@ -85,7 +159,17 @@ impl J2MEEmulator {
             .chain(properties.iter().map(|(k, v)| (k.as_ref(), v.as_ref())))
             .collect::<Vec<_>>();
 
-        let protos = [wie_midp::get_protos().into(), wie_midp_vendor::get_protos().into()];
+        let vendor = wie_midp_vendor::get_protos()
+            .into_iter()
+            .filter(|proto| {
+                let shipped = replaced.iter().any(|name| name == proto.name);
+                if shipped {
+                    tracing::info!("{} comes from the jar", proto.name);
+                }
+                !shipped
+            })
+            .collect::<Vec<_>>();
+        let protos = [wie_midp::get_protos().into(), vendor.into_boxed_slice()];
         let jvm = JvmSupport::new_jvm(system, Some(&jar_filename), Box::new(protos), &properties, RustJavaJvmImplementation).await?;
 
         let main_class_name = main_class_name.replace('.', "/");
@@ -269,5 +353,42 @@ mod tests {
 
         assert_eq!(descriptor.main_class_name, "net.instantcom.boulderdash.BoulderDashMIDlet");
         assert_eq!(descriptor.icon, "icon.png");
+    }
+}
+
+#[cfg(test)]
+mod super_class_tests {
+    use alloc::vec::Vec;
+
+    use super::super_class_name;
+
+    // A class file header and constant pool: 1 Utf8 this, 2 Class #1, 3 Long (two slots), 5 Utf8 parent, 6 Class #5.
+    fn class(parent: &str) -> Vec<u8> {
+        let mut data = Vec::from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 49, 0, 7]);
+        let utf8 = |data: &mut Vec<u8>, text: &str| {
+            data.push(1);
+            data.extend((text.len() as u16).to_be_bytes());
+            data.extend(text.as_bytes());
+        };
+        utf8(&mut data, "com/nokia/mid/ui/FullCanvas");
+        data.extend([7, 0, 1]);
+        data.extend([5, 0, 0, 0, 0, 0, 0, 0, 1]);
+        utf8(&mut data, parent);
+        data.extend([7, 0, 5]);
+        data.extend([0, 0x21, 0, 2, 0, 6]); // access flags, this_class, super_class
+        data
+    }
+
+    #[test]
+    fn reads_the_super_class() {
+        assert_eq!(
+            super_class_name(&class("com/hellomoto/fullscreen/FullCn")).as_deref(),
+            Some("com/hellomoto/fullscreen/FullCn")
+        );
+        assert_eq!(
+            super_class_name(&class("javax/microedition/lcdui/Canvas")).as_deref(),
+            Some("javax/microedition/lcdui/Canvas")
+        );
+        assert_eq!(super_class_name(b"not a class"), None);
     }
 }

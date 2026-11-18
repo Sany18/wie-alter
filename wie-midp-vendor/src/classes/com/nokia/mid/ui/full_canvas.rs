@@ -7,21 +7,10 @@ use jvm_types::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::{
     javax::microedition::lcdui::{Command, CommandListener},
-    net::wie::MIDPKeyCode,
+    net::wie::{NOKIA_KEY_CODES, from_nokia_key_code, to_nokia_key_code},
 };
 
-// Nokia's fixed key constants differ from the shared MIDP event codes.
-const KEY_CODES: [(&str, i32, i32); 9] = [
-    ("KEY_UP_ARROW", MIDPKeyCode::UP as i32, -1),
-    ("KEY_DOWN_ARROW", MIDPKeyCode::DOWN as i32, -2),
-    ("KEY_LEFT_ARROW", MIDPKeyCode::LEFT as i32, -3),
-    ("KEY_RIGHT_ARROW", MIDPKeyCode::RIGHT as i32, -4),
-    ("KEY_SOFTKEY3", MIDPKeyCode::FIRE as i32, -5),
-    ("KEY_SOFTKEY1", MIDPKeyCode::LEFT_SOFT_KEY as i32, -6),
-    ("KEY_SOFTKEY2", MIDPKeyCode::RIGHT_SOFT_KEY as i32, -7),
-    ("KEY_SEND", MIDPKeyCode::CALL as i32, -10),
-    ("KEY_END", MIDPKeyCode::HANGUP as i32, -11),
-];
+const KEY_CODES: [(&str, i32, i32); 9] = NOKIA_KEY_CODES;
 
 // abstract class com.nokia.mid.ui.FullCanvas
 pub struct FullCanvas;
@@ -49,7 +38,6 @@ impl FullCanvas {
                 ),
                 JavaMethodProto::new("getGameAction", "(I)I", Self::get_game_action, MethodAccessFlags::PUBLIC),
                 JavaMethodProto::new("getKeyCode", "(I)I", Self::get_key_code, MethodAccessFlags::PUBLIC),
-                JavaMethodProto::new("handleKeyEvent", "(II)V", Self::handle_key_event, MethodAccessFlags::PROTECTED),
             ],
             fields: KEY_CODES
                 .iter()
@@ -100,10 +88,7 @@ impl FullCanvas {
     async fn get_game_action(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, code: i32) -> JvmResult<i32> {
         tracing::debug!("com.nokia.mid.ui.FullCanvas::getGameAction({this:?}, {code})");
 
-        let code = KEY_CODES
-            .iter()
-            .find_map(|(_, midp, nokia)| (*nokia == code).then_some(*midp))
-            .unwrap_or(code);
+        let code = from_nokia_key_code(code);
         jvm.invoke_special(&this, "javax/microedition/lcdui/Canvas", "getGameAction", "(I)I", (code,))
             .await
     }
@@ -114,21 +99,7 @@ impl FullCanvas {
         let code: i32 = jvm
             .invoke_special(&this, "javax/microedition/lcdui/Canvas", "getKeyCode", "(I)I", (action,))
             .await?;
-        Ok(KEY_CODES
-            .iter()
-            .find_map(|(_, midp, nokia)| (*midp == code).then_some(*nokia))
-            .unwrap_or(code))
-    }
-
-    async fn handle_key_event(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, event_type: i32, code: i32) -> JvmResult<()> {
-        tracing::debug!("com.nokia.mid.ui.FullCanvas::handleKeyEvent({this:?}, {event_type}, {code})");
-
-        let code = KEY_CODES
-            .iter()
-            .find_map(|(_, midp, nokia)| (*midp == code).then_some(*nokia))
-            .unwrap_or(code);
-        jvm.invoke_special(&this, "javax/microedition/lcdui/Canvas", "handleKeyEvent", "(II)V", (event_type, code))
-            .await
+        Ok(to_nokia_key_code(code))
     }
 }
 

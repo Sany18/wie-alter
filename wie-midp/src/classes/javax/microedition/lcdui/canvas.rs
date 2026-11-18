@@ -9,7 +9,7 @@ use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
 use crate::classes::{
     javax::microedition::lcdui::{Display, Graphics},
-    net::wie::{KeyboardEventType, MIDPKeyCode},
+    net::wie::{KeyboardEventType, MIDPKeyCode, to_nokia_key_code},
 };
 
 // abstract class javax.microedition.lcdui.Canvas
@@ -302,6 +302,12 @@ impl Canvas {
             event_type
         } else {
             return Err(jvm.exception("java/lang/IllegalArgumentException", "Invalid keyboard event type").await);
+        };
+        // A Nokia FullCanvas gets Nokia's key codes: the vendor class, or one the jar ships (built on another phone's API).
+        let code = if jvm.is_instance(&**this, "com/nokia/mid/ui/FullCanvas") {
+            to_nokia_key_code(code)
+        } else {
+            code
         };
 
         let _: () = match event_type {
