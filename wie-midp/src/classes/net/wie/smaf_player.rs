@@ -13,6 +13,7 @@ use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use crate::classes::javax::microedition::media::{Control, PlayerListener};
 
 // class net.wie.SmafPlayer
+// Plays SMAF, Standard MIDI and PCM WAVE data through the system audio.
 pub struct SmafPlayer;
 
 impl SmafPlayer {
@@ -77,7 +78,15 @@ impl SmafPlayer {
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
 
         let data = JavaIoInputStream::read_until_end(jvm, &stream).await?;
-        let audio_handle = context.system().audio().load_smaf(&data).unwrap();
+        // A MIDI or WAVE file by its header; anything else is taken as SMAF, as before.
+        let audio_handle = if data.starts_with(b"MThd") || data.starts_with(b"RIFF") {
+            match context.system().audio().load(&data) {
+                Ok(handle) => handle,
+                Err(_) => return Err(jvm.exception("javax/microedition/media/MediaException", "Unsupported media data").await),
+            }
+        } else {
+            context.system().audio().load_smaf(&data).unwrap()
+        };
 
         jvm.put_field(&mut this, "net/wie/SmafPlayer", "audioHandle", "I", audio_handle as i32)
             .await?;
