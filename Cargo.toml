@@ -18,6 +18,7 @@ members = [
     "wie-lgt",
     "wie-skt",
     "wie-web",
+    "wie-headless",
 ]
 
 default-members = ["."]
