@@ -3289,8 +3289,6 @@ dependencies = [
 [[package]]
 name = "jvm-bytecode"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d05f8530c78a378bf7ef6acca6a0664f5d2d6da7b2a9a809e7919c20ac6a2e72"
 dependencies = [
  "async-recursion",
  "async-trait",

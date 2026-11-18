@@ -99,6 +99,10 @@ futures-test = { version = "^0.3" }
 
 test-utils = { path = "test-utils" }
 
+[patch.crates-io]
+# jvm-bytecode 0.4.1 with one change: the interpreter yields in long loops (third_party/jvm-bytecode/README.md)
+jvm-bytecode = { path = "third_party/jvm-bytecode" }
+
 [package]
 name = "wie"
 version.workspace = true
