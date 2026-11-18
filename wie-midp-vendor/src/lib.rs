@@ -6,9 +6,10 @@ mod ringtone;
 
 use wie_jvm_support::WieJavaClassProto;
 
-pub fn get_protos() -> [WieJavaClassProto; 6] {
+pub fn get_protos() -> [WieJavaClassProto; 7] {
     [
         classes::com::nokia::mid::sound::Sound::as_proto(),
+        classes::com::nokia::mid::sound::SoundListener::as_proto(),
         classes::com::nokia::mid::ui::DeviceControl::as_proto(),
         classes::com::nokia::mid::ui::DirectGraphics::as_proto(),
         classes::com::nokia::mid::ui::DirectGraphicsImpl::as_proto(),

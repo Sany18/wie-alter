@@ -1,3 +1,5 @@
+mod sound_listener;
+
 use alloc::{vec, vec::Vec};
 
 use jvm::{Array, ClassInstanceRef, Jvm, Result as JvmResult};
@@ -8,6 +10,8 @@ use wie_backend::{AudioEventData, AudioSequence, TimedAudioEvent};
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
 use crate::ringtone::{self, SAMPLE_RATE, Tone};
+
+pub use self::sound_listener::SoundListener;
 
 const FORMAT_TONE: i32 = 1;
 const FORMAT_WAV: i32 = 5;
