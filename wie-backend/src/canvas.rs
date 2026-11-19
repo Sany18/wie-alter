@@ -45,7 +45,7 @@ pub enum TextAlignment {
     Right,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Color {
     pub a: u8,
     pub r: u8,
@@ -60,6 +60,13 @@ pub trait Image: Send {
     fn get_pixel(&self, x: i32, y: i32) -> Color;
     fn raw(&self) -> Cow<'_, [u8]>;
     fn colors(&self) -> Vec<Color>;
+
+    /// The colors of `out.len()` pixels of row `y` from column `x`; the span lies inside the image.
+    fn get_row(&self, x: i32, y: i32, out: &mut [Color]) {
+        for (i, color) in out.iter_mut().enumerate() {
+            *color = self.get_pixel(x + i as i32, y);
+        }
+    }
 }
 
 pub trait ImageBuffer: Send {
@@ -282,6 +289,14 @@ where
     fn colors(&self) -> Vec<Color> {
         self.data.iter().map(|&x| T::to_color(x)).collect()
     }
+
+    fn get_row(&self, x: i32, y: i32, out: &mut [Color]) {
+        let start = ((y as u32) * self.width + (x as u32)) as usize;
+        let end = start + out.len();
+        for (color, raw) in out.iter_mut().zip(&self.data[start..end]) {
+            *color = T::to_color(*raw);
+        }
+    }
 }
 
 impl<T> ImageBuffer for VecImageBuffer<T>
@@ -320,6 +335,22 @@ where
 
         let offset = ((y as u32) * self.width + (x as u32)) as usize;
         self.data[offset] = T::xor_color(self.data[offset], color);
+    }
+}
+
+// Source-over compositing of a translucent color (0 < alpha < 255), so drawing onto a transparent image keeps its
+// transparent pixels.
+fn source_over(color: Color, bg: Color) -> Color {
+    let src_a = color.a as f32 / 255.0;
+    let dst_a = bg.a as f32 / 255.0 * (1.0 - src_a);
+    let out_a = src_a + dst_a;
+    let mix = |src: u8, dst: u8| ((src as f32 * src_a + dst as f32 * dst_a) / out_a + 0.5) as u8;
+
+    Color {
+        a: (out_a * 255.0 + 0.5) as u8,
+        r: mix(color.r, bg.r),
+        g: mix(color.g, bg.g),
+        b: mix(color.b, bg.b),
     }
 }
 
@@ -383,21 +414,8 @@ where
             return;
         }
 
-        // Source-over compositing, so drawing onto a transparent image keeps its transparent pixels.
         let bg = self.image_buffer.get_pixel(x, y);
-        let src_a = color.a as f32 / 255.0;
-        let dst_a = bg.a as f32 / 255.0 * (1.0 - src_a);
-        let out_a = src_a + dst_a;
-        let mix = |src: u8, dst: u8| ((src as f32 * src_a + dst as f32 * dst_a) / out_a + 0.5) as u8;
-
-        let computed_color = Color {
-            a: (out_a * 255.0 + 0.5) as u8,
-            r: mix(color.r, bg.r),
-            g: mix(color.g, bg.g),
-            b: mix(color.b, bg.b),
-        };
-
-        self.image_buffer.put_pixel(x, y, computed_color);
+        self.image_buffer.put_pixel(x, y, source_over(color, bg));
     }
 
     fn plot(&mut self, x: i32, y: i32, color: Color, clip: &Clip) {
@@ -580,8 +598,48 @@ where
             return;
         }
 
-        let x_step = if dx > sx { -1 } else { 1 };
         let y_step = if dy > sy { -1 } else { 1 };
+        if !self.xor_mode {
+            // Row by row: one read of the source span, one read of the destination span where the source is
+            // translucent, one write. A whole row is read before it is written, so a copy within one image (copyArea)
+            // stays correct; rows go in the direction that does not overwrite rows still to be read.
+            let x0 = (dx as i64 + x_start).max(clip.x as i64);
+            let x1 = (dx as i64 + x_end).min(clip.x as i64 + clip.width as i64);
+            if x0 >= x1 {
+                return;
+            }
+            let count = (x1 - x0) as usize;
+            let mut row = vec![Color::default(); count];
+            let mut bg = vec![Color::default(); count];
+            let mut y = if y_step < 0 { y_end - 1 } else { y_start };
+            while y >= y_start && y < y_end {
+                let py = dy as i64 + y;
+                y += y_step;
+                if py < clip.y as i64 || py >= clip.y as i64 + clip.height as i64 {
+                    continue;
+                }
+                src.get_row((sx as i64 + x0 - dx as i64) as i32, (sy as i64 + py - dy as i64) as i32, &mut row);
+                if row.iter().all(|c| c.a == 255) {
+                    self.image_buffer.put_pixels(x0 as i32, py as i32, count as u32, &row);
+                    continue;
+                }
+                if row.iter().all(|c| c.a == 0) {
+                    continue;
+                }
+                self.image_buffer.get_row(x0 as i32, py as i32, &mut bg);
+                for (dst, color) in bg.iter_mut().zip(&row) {
+                    match color.a {
+                        0 => {}
+                        255 => *dst = *color,
+                        _ => *dst = source_over(*color, *dst),
+                    }
+                }
+                self.image_buffer.put_pixels(x0 as i32, py as i32, count as u32, &bg);
+            }
+            return;
+        }
+
+        let x_step = if dx > sx { -1 } else { 1 };
         let mut y = if y_step < 0 { y_end - 1 } else { y_start };
         while y >= y_start && y < y_end {
             let mut x = if x_step < 0 { x_end - 1 } else { x_start };
@@ -778,7 +836,22 @@ where
     }
 
     fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color, clip: Clip) {
-        // TODO use put_pixels
+        if !self.xor_mode {
+            // One write per row of the rectangle, cut to the image and the clip.
+            let xs = clamp_span(x, w, self.image_buffer.width());
+            let x0 = (xs.start as i64).max(clip.x as i64);
+            let x1 = (xs.end as i64).min(clip.x as i64 + clip.width as i64);
+            if x0 >= x1 {
+                return;
+            }
+            let row = vec![color; (x1 - x0) as usize];
+            for py in clamp_span(y, h, self.image_buffer.height()) {
+                if (py as i64) >= clip.y as i64 && (py as i64) < clip.y as i64 + clip.height as i64 {
+                    self.image_buffer.put_pixels(x0 as i32, py, row.len() as u32, &row);
+                }
+            }
+            return;
+        }
         for py in clamp_span(y, h, self.image_buffer.height()) {
             for px in clamp_span(x, w, self.image_buffer.width()) {
                 self.plot(px, py, color, &clip);

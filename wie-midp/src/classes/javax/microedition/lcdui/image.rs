@@ -516,6 +516,18 @@ where
 
         data.into_iter().map(T::to_color).collect()
     }
+
+    fn get_row(&self, x: i32, y: i32, out: &mut [Color]) {
+        let bytes_per_pixel = self.bytes_per_pixel() as usize;
+        let offset = ((y as u32) * self.width() + (x as u32)) as usize * bytes_per_pixel;
+        let mut buffer = vec![0u8; out.len() * bytes_per_pixel];
+        self.raw_buffer.read(offset, &mut buffer).unwrap();
+
+        let data: Vec<T::DataType> = bytemuck::pod_collect_to_vec(&buffer);
+        for (color, raw) in out.iter_mut().zip(data) {
+            *color = T::to_color(raw);
+        }
+    }
 }
 
 impl<T> ImageBuffer for JavaImageBuffer<T>
