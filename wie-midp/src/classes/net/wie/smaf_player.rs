@@ -1,7 +1,7 @@
-use alloc::vec;
+use alloc::{boxed::Box, vec};
 
 use jvm::{
-    Array, ClassInstanceRef, Jvm, Result,
+    Array, ClassInstance, ClassInstanceRef, Jvm, Result,
     runtime::{JavaIoInputStream, JavaLangString},
 };
 use jvm_class_proto::{JavaFieldProto, JavaMethodProto};
@@ -13,7 +13,10 @@ use rustjava_runtime::classes::java::{
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
-use crate::classes::javax::microedition::media::{Control, PlayerListener};
+use crate::classes::{
+    javax::microedition::media::{Control, PlayerListener},
+    net::wie::PlayerVolumeControl,
+};
 
 // class net.wie.SmafPlayer
 // Plays SMAF, Standard MIDI and PCM WAVE data through the system audio.
@@ -82,7 +85,10 @@ impl SmafPlayer {
                     MethodAccessFlags::PUBLIC,
                 ),
             ],
-            fields: vec![JavaFieldProto::new("audioHandle", "I", FieldAccessFlags::PRIVATE)],
+            fields: vec![
+                JavaFieldProto::new("audioHandle", "I", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("volumeControl", "Lnet/wie/PlayerVolumeControl;", FieldAccessFlags::PRIVATE),
+            ],
             access_flags: ClassAccessFlags::PUBLIC,
         }
     }
@@ -251,19 +257,53 @@ impl SmafPlayer {
         this: ClassInstanceRef<Self>,
         control_type: ClassInstanceRef<String>,
     ) -> Result<ClassInstanceRef<Control>> {
-        tracing::warn!("stub net.wie.SmafPlayer::getControl({this:?}, {control_type:?})");
+        tracing::debug!("net.wie.SmafPlayer::getControl({this:?}, {control_type:?})");
 
         if control_type.is_null() {
             return Err(jvm.exception("java/lang/IllegalArgumentException", "Control type is null").await);
         }
 
-        Ok(None.into())
+        // MMAPI: a control of the package javax.microedition.media.control may be named without the package.
+        let control_type = JavaLangString::to_rust_string(jvm, &control_type).await?;
+        if control_type != "VolumeControl" && control_type != "javax.microedition.media.control.VolumeControl" {
+            return Ok(None.into());
+        }
+
+        let volume_control: Box<dyn ClassInstance> = Self::volume_control(jvm, this).await?.into();
+
+        Ok(volume_control.into())
     }
 
     async fn get_controls(jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> Result<ClassInstanceRef<Array<Control>>> {
-        tracing::warn!("stub net.wie.SmafPlayer::getControls({this:?})");
+        tracing::debug!("net.wie.SmafPlayer::getControls({this:?})");
 
-        Ok(jvm.instantiate_array("Ljavax/microedition/media/Control;", 0).await?.into())
+        let volume_control = Self::volume_control(jvm, this).await?;
+        let mut controls = jvm.instantiate_array("Ljavax/microedition/media/Control;", 1).await?;
+        jvm.store_array(&mut controls, 0, [volume_control]).await?;
+
+        Ok(controls.into())
+    }
+
+    // The player's one VolumeControl, made on the first request.
+    async fn volume_control(jvm: &Jvm, mut this: ClassInstanceRef<Self>) -> Result<ClassInstanceRef<PlayerVolumeControl>> {
+        let volume_control: ClassInstanceRef<PlayerVolumeControl> = jvm
+            .get_field(&this, "net/wie/SmafPlayer", "volumeControl", "Lnet/wie/PlayerVolumeControl;")
+            .await?;
+        if !volume_control.is_null() {
+            return Ok(volume_control);
+        }
+
+        let volume_control: ClassInstanceRef<PlayerVolumeControl> = jvm.new_class("net/wie/PlayerVolumeControl", "()V", ()).await?.into();
+        jvm.put_field(
+            &mut this,
+            "net/wie/SmafPlayer",
+            "volumeControl",
+            "Lnet/wie/PlayerVolumeControl;",
+            volume_control.clone(),
+        )
+        .await?;
+
+        Ok(volume_control)
     }
 }
 
@@ -281,7 +321,7 @@ mod test {
     };
 
     #[test]
-    fn test_unsupported_player_controls() -> Result<()> {
+    fn test_player_controls() -> Result<()> {
         run_jvm_test(Box::new([get_protos().into()]), |jvm| async move {
             let data = jvm.instantiate_array("B", 0).await?;
             let stream = jvm.new_class("java/io/ByteArrayInputStream", "([B)V", (data,)).await?;
@@ -307,9 +347,43 @@ mod test {
                     (),
                 )
                 .await?;
-            assert_eq!(jvm.array_length(&controls).await?, 0);
+            assert_eq!(jvm.array_length(&controls).await?, 1);
 
             let control_type = JavaLangString::from_rust_string(&jvm, "VolumeControl").await?;
+            let control: ClassInstanceRef<Control> = jvm
+                .invoke_virtual(
+                    &player,
+                    "javax/microedition/media/Player",
+                    "getControl",
+                    "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+                    (control_type,),
+                )
+                .await?;
+            assert!(jvm.is_instance(&**control, "javax/microedition/media/control/VolumeControl"));
+            let level: i32 = jvm
+                .invoke_virtual(&control, "javax/microedition/media/control/VolumeControl", "setLevel", "(I)I", (150,))
+                .await?;
+            assert_eq!(level, 100);
+            let _: () = jvm
+                .invoke_virtual(&control, "javax/microedition/media/control/VolumeControl", "setMute", "(Z)V", (true,))
+                .await?;
+
+            let control_type = JavaLangString::from_rust_string(&jvm, "javax.microedition.media.control.VolumeControl").await?;
+            let same_control: ClassInstanceRef<Control> = jvm
+                .invoke_virtual(
+                    &player,
+                    "javax/microedition/media/Player",
+                    "getControl",
+                    "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+                    (control_type,),
+                )
+                .await?;
+            let muted: bool = jvm
+                .invoke_virtual(&same_control, "javax/microedition/media/control/VolumeControl", "isMuted", "()Z", ())
+                .await?;
+            assert!(muted);
+
+            let control_type = JavaLangString::from_rust_string(&jvm, "ToneControl").await?;
             let control: ClassInstanceRef<Control> = jvm
                 .invoke_virtual(
                     &player,
