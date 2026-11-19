@@ -7835,6 +7835,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "wie-headless"
+version = "0.2.28"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "hashbrown 0.17.1",
+ "image",
+ "serde_json",
+ "spin",
+ "tracing",
+ "tracing-subscriber",
+ "wie",
+ "wie-backend",
+ "wie-util",
+]
+
+[[package]]
 name = "wie-j2me"
 version = "0.2.28"
 dependencies = [
