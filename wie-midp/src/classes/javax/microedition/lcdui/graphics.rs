@@ -49,6 +49,18 @@ impl From<Anchor> for TextAlignment {
 }
 
 // class javax.microedition.lcdui.Graphics
+const CONSTANTS: [(&str, i32); 9] = [
+    ("HCENTER", 1),
+    ("VCENTER", 2),
+    ("LEFT", 4),
+    ("RIGHT", 8),
+    ("TOP", 16),
+    ("BOTTOM", 32),
+    ("BASELINE", 64),
+    ("SOLID", 0),
+    ("DOTTED", 1),
+];
+
 pub struct Graphics;
 
 #[allow(clippy::too_many_arguments)]
@@ -59,6 +71,7 @@ impl Graphics {
             parent_class: Some("java/lang/Object"),
             interfaces: vec![],
             methods: vec![
+                JavaMethodProto::new("<clinit>", "()V", Self::cl_init, MethodAccessFlags::STATIC),
                 JavaMethodProto::new(
                     "<init>",
                     "(Ljavax/microedition/lcdui/Image;)V",
@@ -135,9 +148,26 @@ impl Graphics {
                 JavaFieldProto::new("color", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("xorMode", "Z", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("font", "Ljavax/microedition/lcdui/Font;", FieldAccessFlags::PRIVATE),
-            ],
+            ]
+            .into_iter()
+            .chain(
+                CONSTANTS
+                    .iter()
+                    .map(|(name, _)| JavaFieldProto::new(name, "I", FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC | FieldAccessFlags::FINAL)),
+            )
+            .collect(),
             access_flags: ClassAccessFlags::PUBLIC,
         }
+    }
+
+    // Compilers inline these constants, but obfuscated games read them as fields.
+    async fn cl_init(jvm: &Jvm, _: &mut WieJvmContext) -> JvmResult<()> {
+        tracing::debug!("javax.microedition.lcdui.Graphics::<clinit>()");
+
+        for (name, value) in CONSTANTS {
+            jvm.put_static_field("javax/microedition/lcdui/Graphics", name, "I", value).await?;
+        }
+        Ok(())
     }
 
     async fn init_with_image(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, image: ClassInstanceRef<Image>) -> JvmResult<()> {
@@ -1205,6 +1235,16 @@ mod test {
         let spans = super::triangle_spans([(2, 0), (4, 4), (0, 4)]);
         assert_eq!(spans.first(), Some(&(0, 2, 2)));
         assert_eq!(spans.last(), Some(&(4, 0, 4)));
+    }
+
+    #[test]
+    fn graphics_constants_are_fields() -> Result<()> {
+        run_jvm_test(Box::new([get_protos().into()]), |jvm| async move {
+            let top: i32 = jvm.get_static_field("javax/microedition/lcdui/Graphics", "TOP", "I").await?;
+            let hcenter: i32 = jvm.get_static_field("javax/microedition/lcdui/Graphics", "HCENTER", "I").await?;
+            assert_eq!((top, hcenter), (16, 1));
+            Ok(())
+        })
     }
 
     #[test]
