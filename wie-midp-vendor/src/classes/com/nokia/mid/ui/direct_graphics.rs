@@ -11,6 +11,7 @@ const FLIP_HORIZONTAL: i32 = 0x2000;
 const FLIP_VERTICAL: i32 = 0x4000;
 const TYPE_INT_888_RGB: i32 = 888;
 const TYPE_INT_8888_ARGB: i32 = 8888;
+const TYPE_USHORT_4444_ARGB: i32 = 4444;
 
 const CONSTANTS: [(&str, i32); 18] = [
     ("FLIP_HORIZONTAL", FLIP_HORIZONTAL),
@@ -24,7 +25,7 @@ const CONSTANTS: [(&str, i32); 18] = [
     ("TYPE_BYTE_4_GRAY", 4),
     ("TYPE_BYTE_8_GRAY", 8),
     ("TYPE_BYTE_332_RGB", 332),
-    ("TYPE_USHORT_4444_ARGB", 4444),
+    ("TYPE_USHORT_4444_ARGB", TYPE_USHORT_4444_ARGB),
     ("TYPE_USHORT_444_RGB", 444),
     ("TYPE_USHORT_555_RGB", 555),
     ("TYPE_USHORT_1555_ARGB", 1555),
@@ -244,7 +245,8 @@ impl DirectGraphicsImpl {
     async fn get_native_pixel_format(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         tracing::debug!("net.wie.DirectGraphicsImpl::getNativePixelFormat({this:?})");
 
-        Ok(TYPE_INT_8888_ARGB)
+        // The format of the Nokia phones the applications were made for: they pass it with short pixel arrays.
+        Ok(TYPE_USHORT_4444_ARGB)
     }
 
     // Draws with a temporary color, keeping the Graphics color the game set.
