@@ -6,13 +6,17 @@ use jvm::{
 };
 use jvm_class_proto::{JavaFieldProto, JavaMethodProto};
 use jvm_types::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
-use rustjava_runtime::classes::java::{io::InputStream, lang::String};
+use rustjava_runtime::classes::java::{
+    io::InputStream,
+    lang::{Object, String},
+};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
 use crate::classes::javax::microedition::media::{Control, PlayerListener};
 
 // class net.wie.SmafPlayer
+// Plays SMAF, Standard MIDI and PCM WAVE data through the system audio.
 pub struct SmafPlayer;
 
 impl SmafPlayer {
@@ -60,6 +64,18 @@ impl SmafPlayer {
                     MethodAccessFlags::PUBLIC,
                 ),
                 JavaMethodProto::new(
+                    "setTimeBase",
+                    "(Ljavax/microedition/media/TimeBase;)V",
+                    Self::set_time_base,
+                    MethodAccessFlags::PUBLIC,
+                ),
+                JavaMethodProto::new(
+                    "getTimeBase",
+                    "()Ljavax/microedition/media/TimeBase;",
+                    Self::get_time_base,
+                    MethodAccessFlags::PUBLIC,
+                ),
+                JavaMethodProto::new(
                     "getControls",
                     "()[Ljavax/microedition/media/Control;",
                     Self::get_controls,
@@ -77,7 +93,15 @@ impl SmafPlayer {
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
 
         let data = JavaIoInputStream::read_until_end(jvm, &stream).await?;
-        let audio_handle = context.system().audio().load_smaf(&data).unwrap();
+        // A MIDI or WAVE file by its header; anything else is taken as SMAF, as before.
+        let audio_handle = if data.starts_with(b"MThd") || data.starts_with(b"RIFF") {
+            match context.system().audio().load(&data) {
+                Ok(handle) => handle,
+                Err(_) => return Err(jvm.exception("javax/microedition/media/MediaException", "Unsupported media data").await),
+            }
+        } else {
+            context.system().audio().load_smaf(&data).unwrap()
+        };
 
         jvm.put_field(&mut this, "net/wie/SmafPlayer", "audioHandle", "I", audio_handle as i32)
             .await?;
@@ -121,6 +145,24 @@ impl SmafPlayer {
         system.audio().close(audio_handle as u32).unwrap();
 
         Ok(())
+    }
+
+    // The player keeps its own clock: a time base the game sets is not followed.
+    async fn set_time_base(
+        _jvm: &Jvm,
+        _context: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        time_base: ClassInstanceRef<Object>,
+    ) -> Result<()> {
+        tracing::warn!("stub net.wie.SmafPlayer::setTimeBase({this:?}, {time_base:?})");
+
+        Ok(())
+    }
+
+    async fn get_time_base(_jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> Result<ClassInstanceRef<Object>> {
+        tracing::warn!("stub net.wie.SmafPlayer::getTimeBase({this:?})");
+
+        Ok(None.into())
     }
 
     async fn realize(_jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> Result<()> {

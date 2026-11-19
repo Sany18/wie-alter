@@ -1,12 +1,18 @@
+mod standard_midi;
+mod wave_file;
+
 use alloc::{boxed::Box, collections::BTreeMap, collections::BTreeSet, sync::Arc, vec, vec::Vec};
 
 use smaf_player::{SmafEvent, parse_smaf};
 
 use crate::{AudioCommand, AudioEventData, AudioHandle, AudioSequence, AudioSink, TimedAudioEvent};
 
+use self::{standard_midi::parse_standard_midi, wave_file::parse_wave};
+
 #[derive(Debug)]
 pub enum AudioError {
     InvalidHandle,
+    UnsupportedFormat,
 }
 
 pub struct Audio {
@@ -28,6 +34,17 @@ impl Audio {
 
     pub fn load_smaf(&mut self, data: &[u8]) -> Result<AudioHandle, AudioError> {
         Ok(self.load_sequence(convert_smaf_events(parse_smaf(data))))
+    }
+
+    /// SMAF, a Standard MIDI File or a PCM WAVE file, told apart by their headers.
+    pub fn load(&mut self, data: &[u8]) -> Result<AudioHandle, AudioError> {
+        if data.starts_with(b"MMMD") {
+            return self.load_smaf(data);
+        }
+        let sequence = parse_standard_midi(data)
+            .or_else(|| parse_wave(data))
+            .ok_or(AudioError::UnsupportedFormat)?;
+        Ok(self.load_sequence(sequence))
     }
 
     // A sequence the caller has already rendered (synthesized tones, for one).

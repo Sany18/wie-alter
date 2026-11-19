@@ -1,4 +1,4 @@
-use alloc::vec;
+use alloc::{string::String as RustString, vec};
 
 use jvm::{Array, ClassInstanceRef, Jvm, Result, runtime::JavaLangString};
 use jvm_class_proto::JavaMethodProto;
@@ -8,6 +8,10 @@ use rustjava_runtime::classes::java::{io::InputStream, lang::String};
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
 use crate::classes::javax::microedition::media::Player;
+
+// The names games give Standard MIDI and WAVE data (net.wie.SmafPlayer tells the formats apart by their headers).
+const MIDI_TYPES: [&str; 5] = ["audio/midi", "audio/mid", "audio/x-midi", "audio/x-mid", "audio/sp-midi"];
+const WAVE_TYPES: [&str; 4] = ["audio/x-wav", "audio/wav", "audio/wave", "audio/x-wave"];
 
 // class javax.microedition.media.Manager
 pub struct Manager;
@@ -63,8 +67,23 @@ impl Manager {
     ) -> Result<ClassInstanceRef<Player>> {
         tracing::debug!("javax.microedition.media.Manager::createPlayer({stream:?}, {type:?})");
 
-        let type_string = JavaLangString::to_rust_string(jvm, &r#type).await?;
-        if type_string == "application/vnd.smaf" {
+        // A game whose resource is missing passes the null of getResourceAsStream.
+        if stream.is_null() {
+            return Err(jvm.exception("java/lang/IllegalArgumentException", "stream is null").await);
+        }
+        // Content types are case-insensitive and may carry parameters ("audio/X-wav", "audio/midi; rate=8000").
+        // A null type asks the player to find out the format: it tells MIDI and WAVE by their headers.
+        let type_string = if r#type.is_null() {
+            RustString::new()
+        } else {
+            JavaLangString::to_rust_string(jvm, &r#type).await?
+        };
+        let type_string = type_string.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+        if type_string.is_empty()
+            || type_string == "application/vnd.smaf"
+            || MIDI_TYPES.contains(&type_string.as_str())
+            || WAVE_TYPES.contains(&type_string.as_str())
+        {
             Ok(jvm.new_class("net/wie/SmafPlayer", "(Ljava/io/InputStream;)V", (stream,)).await?.into())
         } else {
             Err(jvm.exception("javax/microedition/media/MediaException", "Unsupported media type").await)
@@ -105,10 +124,12 @@ impl Manager {
     ) -> Result<ClassInstanceRef<Array<String>>> {
         tracing::debug!("javax.microedition.media.Manager::getSupportedContentTypes({protocol:?})");
 
-        let mut types = jvm.instantiate_array("Ljava/lang/String;", usize::from(protocol.is_null())).await?;
-        if protocol.is_null() {
-            let content_type = JavaLangString::from_rust_string(jvm, "application/vnd.smaf").await?;
-            jvm.store_array(&mut types, 0, [content_type]).await?;
+        let supported = ["application/vnd.smaf", MIDI_TYPES[0], WAVE_TYPES[0]];
+        let count = if protocol.is_null() { supported.len() } else { 0 };
+        let mut types = jvm.instantiate_array("Ljava/lang/String;", count).await?;
+        for (index, content_type) in supported.iter().take(count).enumerate() {
+            let content_type = JavaLangString::from_rust_string(jvm, content_type).await?;
+            jvm.store_array(&mut types, index, [content_type]).await?;
         }
         Ok(types.into())
     }
@@ -136,7 +157,7 @@ mod test {
                     (None,),
                 )
                 .await?;
-            assert_eq!(jvm.array_length(&content_types).await?, 1);
+            assert_eq!(jvm.array_length(&content_types).await?, 3);
             let content_type: ClassInstanceRef<String> = jvm.load_array(&content_types, 0, 1).await?.remove(0);
             assert_eq!(JavaLangString::to_rust_string(&jvm, &content_type).await?, "application/vnd.smaf");
             for protocol in ["http", "file", "", "unknown"] {
