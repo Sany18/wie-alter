@@ -11,11 +11,12 @@ use rustjava_runtime::classes::java::{
     lang::{Object, String},
 };
 
+use wie_backend::AudioSequence;
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
 use crate::classes::{
     javax::microedition::media::{Control, PlayerListener},
-    net::wie::PlayerVolumeControl,
+    net::wie::{PlayerToneControl, PlayerVolumeControl},
 };
 
 // class net.wie.SmafPlayer
@@ -30,6 +31,7 @@ impl SmafPlayer {
             interfaces: vec!["javax/microedition/media/Player"],
             methods: vec![
                 JavaMethodProto::new("<init>", "(Ljava/io/InputStream;)V", Self::init, MethodAccessFlags::PUBLIC),
+                JavaMethodProto::new("<init>", "()V", Self::init_tone, MethodAccessFlags::PUBLIC),
                 JavaMethodProto::new("realize", "()V", Self::realize, MethodAccessFlags::PUBLIC),
                 JavaMethodProto::new("prefetch", "()V", Self::prefetch, MethodAccessFlags::PUBLIC),
                 JavaMethodProto::new("start", "()V", Self::start, MethodAccessFlags::PUBLIC),
@@ -88,6 +90,7 @@ impl SmafPlayer {
             fields: vec![
                 JavaFieldProto::new("audioHandle", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("volumeControl", "Lnet/wie/PlayerVolumeControl;", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("toneControl", "Lnet/wie/PlayerToneControl;", FieldAccessFlags::PRIVATE),
             ],
             access_flags: ClassAccessFlags::PUBLIC,
         }
@@ -113,6 +116,29 @@ impl SmafPlayer {
             .await?;
 
         Ok(())
+    }
+
+    // The tone player of Manager.createPlayer("device://tone"): silent until its ToneControl gets a sequence.
+    async fn init_tone(jvm: &Jvm, context: &mut WieJvmContext, mut this: ClassInstanceRef<Self>) -> Result<()> {
+        tracing::debug!("net.wie.SmafPlayer::<init>({this:?})");
+
+        let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
+
+        let audio_handle = context.system().audio().load_sequence(AudioSequence { duration: 0, events: vec![] });
+        jvm.put_field(&mut this, "net/wie/SmafPlayer", "audioHandle", "I", audio_handle as i32)
+            .await?;
+
+        let tone_control = jvm
+            .new_class("net/wie/PlayerToneControl", "(Lnet/wie/SmafPlayer;)V", (this.clone(),))
+            .await?;
+        jvm.put_field(
+            &mut this,
+            "net/wie/SmafPlayer",
+            "toneControl",
+            "Lnet/wie/PlayerToneControl;",
+            tone_control,
+        )
+        .await
     }
 
     async fn start(jvm: &Jvm, context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> Result<()> {
@@ -148,7 +174,8 @@ impl SmafPlayer {
 
         let system = context.system();
 
-        system.audio().close(audio_handle as u32).unwrap();
+        // Closing a closed player does nothing.
+        let _ = system.audio().close(audio_handle as u32);
 
         Ok(())
     }
@@ -265,7 +292,16 @@ impl SmafPlayer {
 
         // MMAPI: a control of the package javax.microedition.media.control may be named without the package.
         let control_type = JavaLangString::to_rust_string(jvm, &control_type).await?;
-        if control_type != "VolumeControl" && control_type != "javax.microedition.media.control.VolumeControl" {
+        let control_type = control_type.strip_prefix("javax.microedition.media.control.").unwrap_or(&control_type);
+        if control_type == "ToneControl" {
+            // Only a tone player has one.
+            let tone_control: ClassInstanceRef<PlayerToneControl> = jvm
+                .get_field(&this, "net/wie/SmafPlayer", "toneControl", "Lnet/wie/PlayerToneControl;")
+                .await?;
+            let tone_control: Option<Box<dyn ClassInstance>> = tone_control.into();
+            return Ok(tone_control.into());
+        }
+        if control_type != "VolumeControl" {
             return Ok(None.into());
         }
 
