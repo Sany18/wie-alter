@@ -17,6 +17,7 @@ use crate::classes::javax::microedition::{
     midlet::MIDlet,
 };
 
+const GARBAGE_COLLECTION_INTERVAL_MS: i64 = 500;
 const FONT_HEIGHT: i32 = 12;
 const TITLE_HORIZONTAL_PADDING: i32 = 4;
 const TITLE_VERTICAL_PADDING: i32 = 2;
@@ -153,6 +154,7 @@ impl Display {
                 JavaFieldProto::new("repaintTop", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("repaintRight", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("repaintBottom", "I", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("lastGarbageCollection", "J", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("alertGeneration", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("tickerGeneration", "I", FieldAccessFlags::PRIVATE),
             ],
@@ -937,15 +939,16 @@ impl Display {
             .await?;
         let screen_width: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Display", "width", "I").await?;
         let screen_height: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Display", "height", "I").await?;
-        let (viewport_width, viewport_height) = if displayable.is_null() {
-            (screen_width, screen_height)
-        } else {
-            let layout = Self::chrome_layout(jvm, context, &displayable, screen_width, screen_height).await?;
-            (layout.content_width, layout.content_height)
-        };
+        // A full repaint (repaint()) needs no layout; only a repaint of an area is clipped to the content viewport.
         let (mut left, mut top, mut right, mut bottom) = if width == -1 && height == -1 {
             (0, 0, screen_width, screen_height)
         } else {
+            let (viewport_width, viewport_height) = if displayable.is_null() {
+                (screen_width, screen_height)
+            } else {
+                let layout = Self::chrome_layout(jvm, context, &displayable, screen_width, screen_height).await?;
+                (layout.content_width, layout.content_height)
+            };
             (
                 x.max(0),
                 y.max(0),
@@ -1203,8 +1206,18 @@ impl Display {
 
             screen.paint(&*image);
         }
-        if let Err(error) = jvm.collect_garbage() {
-            return Err(jvm.exception("net/wie/WieError", &error.to_string()).await);
+        // A full collection walks the whole heap: after a paint at most every GARBAGE_COLLECTION_INTERVAL_MS, not on
+        // every frame of a game that paints 30 times a second.
+        let now = context.system().platform().now().raw() as i64;
+        let last: i64 = jvm
+            .get_field(&this, "javax/microedition/lcdui/Display", "lastGarbageCollection", "J")
+            .await?;
+        if now - last >= GARBAGE_COLLECTION_INTERVAL_MS || now < last {
+            jvm.put_field(&mut this, "javax/microedition/lcdui/Display", "lastGarbageCollection", "J", now)
+                .await?;
+            if let Err(error) = jvm.collect_garbage() {
+                return Err(jvm.exception("net/wie/WieError", &error.to_string()).await);
+            }
         }
 
         Ok(())
