@@ -6,7 +6,10 @@ use jvm::{
 };
 use jvm_class_proto::{JavaFieldProto, JavaMethodProto};
 use jvm_types::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
-use rustjava_runtime::classes::java::{io::InputStream, lang::String};
+use rustjava_runtime::classes::java::{
+    io::InputStream,
+    lang::{Object, String},
+};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
@@ -58,6 +61,18 @@ impl SmafPlayer {
                     "getControl",
                     "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
                     Self::get_control,
+                    MethodAccessFlags::PUBLIC,
+                ),
+                JavaMethodProto::new(
+                    "setTimeBase",
+                    "(Ljavax/microedition/media/TimeBase;)V",
+                    Self::set_time_base,
+                    MethodAccessFlags::PUBLIC,
+                ),
+                JavaMethodProto::new(
+                    "getTimeBase",
+                    "()Ljavax/microedition/media/TimeBase;",
+                    Self::get_time_base,
                     MethodAccessFlags::PUBLIC,
                 ),
                 JavaMethodProto::new(
@@ -130,6 +145,24 @@ impl SmafPlayer {
         system.audio().close(audio_handle as u32).unwrap();
 
         Ok(())
+    }
+
+    // The player keeps its own clock: a time base the game sets is not followed.
+    async fn set_time_base(
+        _jvm: &Jvm,
+        _context: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        time_base: ClassInstanceRef<Object>,
+    ) -> Result<()> {
+        tracing::warn!("stub net.wie.SmafPlayer::setTimeBase({this:?}, {time_base:?})");
+
+        Ok(())
+    }
+
+    async fn get_time_base(_jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> Result<ClassInstanceRef<Object>> {
+        tracing::warn!("stub net.wie.SmafPlayer::getTimeBase({this:?})");
+
+        Ok(None.into())
     }
 
     async fn realize(_jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> Result<()> {
