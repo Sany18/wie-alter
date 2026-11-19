@@ -1067,9 +1067,9 @@ impl Graphics {
     }
 
     async fn fill_triangle(
-        _: &Jvm,
+        jvm: &Jvm,
         _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
+        mut this: ClassInstanceRef<Self>,
         x1: i32,
         y1: i32,
         x2: i32,
@@ -1077,7 +1077,18 @@ impl Graphics {
         x3: i32,
         y3: i32,
     ) -> JvmResult<()> {
-        tracing::warn!("stub javax.microedition.lcdui.Graphics::fillTriangle({this:?}, {x1}, {y1}, {x2}, {y2}, {x3}, {y3})");
+        tracing::debug!("javax.microedition.lcdui.Graphics::fillTriangle({this:?}, {x1}, {y1}, {x2}, {y2}, {x3}, {y3})");
+
+        let rgb: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "color", "I").await?;
+        let mut canvas = Self::canvas(jvm, &mut this).await?;
+        let translate_x: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "translateX", "I").await?;
+        let translate_y: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "translateY", "I").await?;
+        let clip = Self::clip(jvm, &this).await?;
+        let color = Rgb8Pixel::to_color(rgb as _);
+
+        for (y, left, right) in triangle_spans([(x1, y1), (x2, y2), (x3, y3)]) {
+            canvas.fill_rect(translate_x + left, translate_y + y, (right - left + 1) as _, 1, color, clip);
+        }
 
         Ok(())
     }
@@ -1140,6 +1151,42 @@ impl Graphics {
     }
 }
 
+/// The rows of a filled triangle, its edges included (MIDP Graphics.fillTriangle): (y, first x, last x) for each row.
+fn triangle_spans(points: [(i32, i32); 3]) -> Vec<(i32, i32, i32)> {
+    let top = points.iter().map(|p| p.1).min().unwrap();
+    let bottom = points.iter().map(|p| p.1).max().unwrap();
+    // rows outside any screen are not walked: guest coordinates can be huge
+    let (top, bottom) = (top.max(-4096), bottom.min(top.max(-4096) + 8192));
+    let edges = [(points[0], points[1]), (points[1], points[2]), (points[2], points[0])];
+    let mut spans = Vec::new();
+    for y in top..=bottom {
+        let mut left = i64::MAX;
+        let mut right = i64::MIN;
+        for &((ax, ay), (bx, by)) in &edges {
+            if y < ay.min(by) || y > ay.max(by) {
+                continue;
+            }
+            let (from, to) = if ay == by {
+                (ax.min(bx) as i64, ax.max(bx) as i64)
+            } else {
+                // x of the edge at this row, rounded to the nearest pixel
+                let (mut num, mut den) = ((y as i64 - ay as i64) * (bx as i64 - ax as i64), by as i64 - ay as i64);
+                if den < 0 {
+                    (num, den) = (-num, -den);
+                }
+                let x = ax as i64 + (2 * num + den).div_euclid(2 * den);
+                (x, x)
+            };
+            left = left.min(from);
+            right = right.max(to);
+        }
+        if left <= right {
+            spans.push((y, left as i32, right as i32));
+        }
+    }
+    spans
+}
+
 #[cfg(test)]
 mod test {
     use alloc::{boxed::Box, vec};
@@ -1150,6 +1197,15 @@ mod test {
     use wie_util::Result;
 
     use crate::{classes::javax::microedition::lcdui::Image, get_protos};
+
+    #[test]
+    fn triangle_spans_cover_the_edges() {
+        let spans = super::triangle_spans([(0, 0), (4, 0), (0, 4)]);
+        assert_eq!(spans, vec![(0, 0, 4), (1, 0, 3), (2, 0, 2), (3, 0, 1), (4, 0, 0)]);
+        let spans = super::triangle_spans([(2, 0), (4, 4), (0, 4)]);
+        assert_eq!(spans.first(), Some(&(0, 2, 2)));
+        assert_eq!(spans.last(), Some(&(4, 0, 4)));
+    }
 
     #[test]
     fn test_graphics() -> Result<()> {
