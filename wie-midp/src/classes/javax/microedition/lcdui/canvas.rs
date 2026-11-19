@@ -1,4 +1,4 @@
-use alloc::{string::String as RustString, vec};
+use alloc::{format, string::String as RustString, vec};
 
 use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
 use jvm_class_proto::JavaMethodProto;
@@ -9,7 +9,7 @@ use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
 use crate::classes::{
     javax::microedition::lcdui::{Display, Graphics},
-    net::wie::{KeyboardEventType, MIDPKeyCode, to_nokia_key_code},
+    net::wie::{KeyboardEventType, MIDPKeyCode, from_nokia_key_code, to_nokia_key_code},
 };
 
 // abstract class javax.microedition.lcdui.Canvas
@@ -157,7 +157,8 @@ impl Canvas {
     async fn get_game_action(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, key: i32) -> JvmResult<i32> {
         tracing::debug!("javax.microedition.lcdui.Canvas::getGameAction({this:?}, {key})");
 
-        let action = match MIDPKeyCode::from_raw(key) {
+        // A Nokia key code (-1 to -7, what a FullCanvas gets) means the same key as ours.
+        let action = match MIDPKeyCode::from_raw(from_nokia_key_code(key)) {
             Some(MIDPKeyCode::UP) => 1,        // UP
             Some(MIDPKeyCode::DOWN) => 6,      // DOWN
             Some(MIDPKeyCode::LEFT) => 2,      // LEFT
@@ -244,7 +245,7 @@ impl Canvas {
     async fn get_key_name(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, key_code: i32) -> JvmResult<ClassInstanceRef<String>> {
         tracing::debug!("javax.microedition.lcdui.Canvas::getKeyName({this:?}, {key_code})");
 
-        let name = match MIDPKeyCode::from_raw(key_code) {
+        let name = match MIDPKeyCode::from_raw(from_nokia_key_code(key_code)) {
             Some(MIDPKeyCode::UP) => "UP".into(),
             Some(MIDPKeyCode::DOWN) => "DOWN".into(),
             Some(MIDPKeyCode::LEFT) => "LEFT".into(),
@@ -259,7 +260,8 @@ impl Canvas {
             Some(MIDPKeyCode::VOLUME_DOWN) => "VOLUME DOWN".into(),
             // The remaining key codes are the ASCII codes of the keypad characters.
             Some(_) => RustString::from(key_code as u8 as char),
-            None => return Err(jvm.exception("java/lang/IllegalArgumentException", "Invalid key code").await),
+            // Games ask for the names of the keys of other phones too: a name instead of an exception.
+            None => format!("KEY {key_code}"),
         };
 
         Ok(JavaLangString::from_rust_string(jvm, &name).await?.into())
@@ -603,6 +605,27 @@ mod test {
             jvm.put_field(&mut this, "javax/microedition/lcdui/TestRecordingGameCanvas", "released", "I", code)
                 .await
         }
+    }
+
+    #[test]
+    fn nokia_key_codes_have_game_actions_and_names() -> Result<()> {
+        run_jvm_test(Box::new([get_protos().into(), [RecordingCanvas::as_proto()].into()]), |jvm| async move {
+            let canvas: ClassInstanceRef<Canvas> = jvm.new_class("javax/microedition/lcdui/TestRecordingCanvas", "()V", ()).await?.into();
+            let class = "javax/microedition/lcdui/Canvas";
+            // Nokia -1..-5: UP, DOWN, LEFT, RIGHT, FIRE
+            for (code, action) in [(-1, 1), (-2, 6), (-3, 2), (-4, 5), (-5, 8)] {
+                let got: i32 = jvm.invoke_virtual(&canvas, class, "getGameAction", "(I)I", (code,)).await?;
+                assert_eq!(got, action, "game action of Nokia key code {code}");
+            }
+            let name: ClassInstanceRef<rustjava_runtime::classes::java::lang::String> =
+                jvm.invoke_virtual(&canvas, class, "getKeyName", "(I)Ljava/lang/String;", (-6,)).await?;
+            assert_eq!(JavaLangString::to_rust_string(&jvm, &name).await?, "SOFT1");
+            let unknown: JvmResult<ClassInstanceRef<rustjava_runtime::classes::java::lang::String>> =
+                jvm.invoke_virtual(&canvas, class, "getKeyName", "(I)Ljava/lang/String;", (-99,)).await;
+            assert!(unknown.is_ok(), "an unknown key code has a name too");
+
+            Ok(())
+        })
     }
 
     #[test]
