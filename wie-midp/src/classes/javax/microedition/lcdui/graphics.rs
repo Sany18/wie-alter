@@ -488,6 +488,48 @@ impl Graphics {
         Ok(())
     }
 
+    // Text in the font of the graphics: the anchor's TOP (or none), BASELINE or BOTTOM places the line vertically.
+    #[allow(clippy::too_many_arguments)]
+    async fn draw_text(
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        this: &ClassInstanceRef<Self>,
+        canvas: &mut dyn BackendCanvas,
+        string: &str,
+        x: i32,
+        y: i32,
+        anchor: Anchor,
+    ) -> JvmResult<()> {
+        let translate_x: i32 = jvm.get_field(this, "javax/microedition/lcdui/Graphics", "translateX", "I").await?;
+        let translate_y: i32 = jvm.get_field(this, "javax/microedition/lcdui/Graphics", "translateY", "I").await?;
+        let color: i32 = jvm.get_field(this, "javax/microedition/lcdui/Graphics", "color", "I").await?;
+        let font: ClassInstanceRef<Font> = jvm
+            .get_field(this, "javax/microedition/lcdui/Graphics", "font", "Ljavax/microedition/lcdui/Font;")
+            .await?;
+        let style = Font::text_style(jvm, &font).await?;
+        let clip = Self::clip(jvm, this).await?;
+
+        let top = if anchor.contains(Anchor::BASELINE) {
+            y - style.baseline()
+        } else if anchor.contains(Anchor::BOTTOM) {
+            y - style.height()
+        } else {
+            y
+        };
+        canvas.draw_styled_text(
+            context.system().platform().font(),
+            string,
+            translate_x + x,
+            translate_y + top,
+            anchor.into(),
+            Rgb8Pixel::to_color(color as _),
+            clip,
+            style,
+        );
+
+        Ok(())
+    }
+
     async fn draw_char(
         jvm: &Jvm,
         context: &mut WieJvmContext,
@@ -503,22 +545,7 @@ impl Graphics {
 
         let string = RustString::from_utf16(&[ch]).unwrap();
 
-        let translate_x: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "translateX", "I").await?;
-        let translate_y: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "translateY", "I").await?;
-
-        let color: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "color", "I").await?;
-
-        let clip = Self::clip(jvm, &this).await?;
-
-        canvas.draw_text(
-            context.system().platform().font(),
-            &string,
-            (translate_x + x) as _,
-            (translate_y + y) as _,
-            anchor.into(),
-            Rgb8Pixel::to_color(color as _),
-            clip,
-        );
+        Self::draw_text(jvm, context, &this, &mut *canvas, &string, x, y, anchor).await?;
 
         Ok(())
     }
@@ -541,22 +568,7 @@ impl Graphics {
         let chars = jvm.load_array(&chars, offset as _, length as _).await?;
         let string = RustString::from_utf16(&chars).unwrap();
 
-        let translate_x: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "translateX", "I").await?;
-        let translate_y: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "translateY", "I").await?;
-
-        let color: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "color", "I").await?;
-
-        let clip = Self::clip(jvm, &this).await?;
-
-        canvas.draw_text(
-            context.system().platform().font(),
-            &string,
-            (translate_x + x) as _,
-            (translate_y + y) as _,
-            anchor.into(),
-            Rgb8Pixel::to_color(color as _),
-            clip,
-        );
+        Self::draw_text(jvm, context, &this, &mut *canvas, &string, x, y, anchor).await?;
 
         Ok(())
     }
@@ -579,22 +591,7 @@ impl Graphics {
 
         let mut canvas = Self::canvas(jvm, &mut this).await?;
 
-        let translate_x: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "translateX", "I").await?;
-        let translate_y: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "translateY", "I").await?;
-
-        let color: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "color", "I").await?;
-
-        let clip = Self::clip(jvm, &this).await?;
-
-        canvas.draw_text(
-            context.system().platform().font(),
-            &string,
-            (translate_x + x) as _,
-            (translate_y + y) as _,
-            anchor.into(),
-            Rgb8Pixel::to_color(color as _),
-            clip,
-        );
+        Self::draw_text(jvm, context, &this, &mut *canvas, &string, x, y, anchor).await?;
 
         Ok(())
     }
@@ -617,22 +614,7 @@ impl Graphics {
 
         let mut canvas = Self::canvas(jvm, &mut this).await?;
 
-        let translate_x: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "translateX", "I").await?;
-        let translate_y: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "translateY", "I").await?;
-
-        let color: i32 = jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "color", "I").await?;
-
-        let clip = Self::clip(jvm, &this).await?;
-
-        canvas.draw_text(
-            context.system().platform().font(),
-            &substring,
-            (translate_x + x) as _,
-            (translate_y + y) as _,
-            anchor.into(),
-            Rgb8Pixel::to_color(color as _),
-            clip,
-        );
+        Self::draw_text(jvm, context, &this, &mut *canvas, &substring, x, y, anchor).await?;
 
         Ok(())
     }
@@ -1219,14 +1201,17 @@ fn triangle_spans(points: [(i32, i32); 3]) -> Vec<(i32, i32, i32)> {
 
 #[cfg(test)]
 mod test {
-    use alloc::{boxed::Box, vec};
+    use alloc::{boxed::Box, vec, vec::Vec};
 
-    use jvm::{ClassInstance, ClassInstanceRef, Jvm, Result as JvmResult};
+    use jvm::{ClassInstance, ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
 
     use test_utils::run_jvm_test;
     use wie_util::Result;
 
-    use crate::{classes::javax::microedition::lcdui::Image, get_protos};
+    use crate::{
+        classes::javax::microedition::lcdui::{Font, Image},
+        get_protos,
+    };
 
     #[test]
     fn triangle_spans_cover_the_edges() {
@@ -1519,6 +1504,77 @@ mod test {
                 let color = backend_image.get_pixel(x, y);
                 assert_eq!((color.r, color.g, color.b), (0xff, 0xff, 0xff));
             }
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_font_sizes_styles_and_text_anchors() -> Result<()> {
+        run_jvm_test(Box::new([get_protos().into()]), |jvm| async move {
+            let font_class = "javax/microedition/lcdui/Font";
+            let get_font = async |style: i32, size: i32| -> JvmResult<ClassInstanceRef<Font>> {
+                jvm.invoke_static(font_class, "getFont", "(III)Ljavax/microedition/lcdui/Font;", (0, style, size))
+                    .await
+            };
+            let text = JavaLangString::from_rust_string(&jvm, "Hello").await?;
+
+            // SIZE_SMALL, SIZE_MEDIUM (the default font) and SIZE_LARGE: height, baseline and width grow
+            let mut last = (0, 0, 0);
+            for size in [8, 0, 16] {
+                let font = get_font(0, size).await?;
+                let height: i32 = jvm.invoke_virtual(&font, font_class, "getHeight", "()I", ()).await?;
+                let baseline: i32 = jvm.invoke_virtual(&font, font_class, "getBaselinePosition", "()I", ()).await?;
+                let width: i32 = jvm
+                    .invoke_virtual(&font, font_class, "stringWidth", "(Ljava/lang/String;)I", (text.clone(),))
+                    .await?;
+                assert!(height > last.0 && baseline > last.1 && width > last.2, "size {size}");
+                assert!(baseline < height);
+                assert_eq!(jvm.invoke_virtual::<_, i32>(&font, font_class, "getSize", "()I", ()).await?, size);
+                last = (height, baseline, width);
+            }
+            let default: ClassInstanceRef<Font> = jvm
+                .invoke_static(font_class, "getDefaultFont", "()Ljavax/microedition/lcdui/Font;", ())
+                .await?;
+            assert_eq!(
+                jvm.invoke_virtual::<_, i32>(&default, font_class, "getHeight", "()I", ()).await?,
+                Font::HEIGHT
+            );
+
+            // bold: one pixel wider for each character
+            let plain = get_font(0, 0).await?;
+            let bold = get_font(1, 0).await?;
+            assert!(jvm.invoke_virtual::<_, bool>(&bold, font_class, "isBold", "()Z", ()).await?);
+            let plain_width: i32 = jvm
+                .invoke_virtual(&plain, font_class, "stringWidth", "(Ljava/lang/String;)I", (text.clone(),))
+                .await?;
+            let bold_width: i32 = jvm
+                .invoke_virtual(&bold, font_class, "stringWidth", "(Ljava/lang/String;)I", (text.clone(),))
+                .await?;
+            assert_eq!(bold_width, plain_width + 5);
+
+            // the same line drawn by its top, its baseline and its bottom
+            let mut pictures = vec![];
+            for (y, anchor) in [(10, 16 | 4), (10 + Font::HEIGHT - 2, 64 | 4), (10 + Font::HEIGHT, 32 | 4)] {
+                let (image, graphics) = new_graphics(&jvm).await?;
+                let _: () = jvm
+                    .invoke_virtual(
+                        &graphics,
+                        "javax/microedition/lcdui/Graphics",
+                        "drawString",
+                        "(Ljava/lang/String;III)V",
+                        (text.clone(), 5, y, anchor),
+                    )
+                    .await?;
+                let backend_image = Image::image(&jvm, &image).await?;
+                let picture = (0..100)
+                    .flat_map(|y| (0..100).map(move |x| (x, y)))
+                    .map(|(x, y)| backend_image.get_pixel(x, y).r)
+                    .collect::<Vec<_>>();
+                pictures.push(picture);
+            }
+            assert!(pictures[0].iter().any(|r| *r != 0xff), "the text is drawn");
+            assert!(pictures[0] == pictures[1] && pictures[1] == pictures[2]);
 
             Ok(())
         })
