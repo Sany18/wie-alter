@@ -5,7 +5,7 @@ pub mod classes;
 
 use wie_jvm_support::WieJavaClassProto;
 
-pub fn get_protos() -> [WieJavaClassProto; 52] {
+pub fn get_protos() -> [WieJavaClassProto; 53] {
     [
         classes::javax::microedition::io::Connection::as_proto(),
         classes::javax::microedition::io::ConnectionNotFoundException::as_proto(),
@@ -56,6 +56,7 @@ pub fn get_protos() -> [WieJavaClassProto; 52] {
         classes::net::wie::EventQueue::as_proto(),
         classes::net::wie::ItemStateEvent::as_proto(),
         classes::net::wie::Launcher::as_proto(),
+        classes::net::wie::PlayerVolumeControl::as_proto(),
         classes::net::wie::RecordEnumeration::as_proto(),
         classes::net::wie::SmafPlayer::as_proto(),
         classes::net::wie::WieError::as_proto(),
