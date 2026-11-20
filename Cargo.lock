@@ -7765,6 +7765,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "image",
  "num-traits",
+ "png",
  "serde",
  "smaf",
  "smaf-player",

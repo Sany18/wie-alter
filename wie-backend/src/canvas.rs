@@ -1025,6 +1025,10 @@ pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
         return Ok(Box::new(VecImageBuffer::<ArgbPixel>::from_raw(indices.width(), indices.height(), pixels)));
     }
 
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return decode_png(data);
+    }
+
     let image = ImageReader::new(Cursor::new(&data))
         .with_guessed_format()
         .map_err(|x| WieError::FatalError(x.to_string()))?
@@ -1039,6 +1043,37 @@ pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
         rgba.height(),
         pod_collect_to_vec(&data),
     )) as Box<_>)
+}
+
+// Phones did not check the checksums of PNG chunks, and apps change the palette of PNG data in memory without
+// updating the CRC of its PLTE chunk.
+fn decode_png(data: &[u8]) -> Result<Box<dyn Image>> {
+    extern crate std;
+
+    use std::io::Cursor;
+
+    let mut decoder = png::Decoder::new(Cursor::new(data));
+    decoder.ignore_checksums(true);
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().map_err(|x| WieError::FatalError(x.to_string()))?;
+    let mut buffer = vec![0; reader.output_buffer_size().ok_or_else(|| WieError::FatalError("PNG too large".into()))?];
+    let info = reader.next_frame(&mut buffer).map_err(|x| WieError::FatalError(x.to_string()))?;
+
+    let pixels = buffer[..info.buffer_size()]
+        .chunks_exact(info.color_type.samples())
+        .map(|x| {
+            let [r, g, b, a] = match *x {
+                [l] => [l, l, l, 255],
+                [l, a] => [l, l, l, a],
+                [r, g, b] => [r, g, b, 255],
+                [r, g, b, a] => [r, g, b, a],
+                _ => unreachable!(),
+            };
+            u32::from_le_bytes([b, g, r, a])
+        })
+        .collect();
+
+    Ok(Box::new(VecImageBuffer::<ArgbPixel>::from_raw(info.width, info.height, pixels)))
 }
 
 pub fn encode_bmp(image: &dyn Image) -> Result<Vec<u8>> {
@@ -1188,6 +1223,29 @@ mod tests {
             pixel.b ^= color.b;
             pixel.a = 255;
         }
+    }
+
+    #[test]
+    fn test_decode_png_with_a_changed_palette() {
+        extern crate std;
+
+        let mut data = Vec::new();
+        let mut encoder = png::Encoder::new(&mut data, 2, 1);
+        encoder.set_color(png::ColorType::Indexed);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_palette(vec![255, 0, 0, 0, 0, 255]);
+        encoder.set_trns(vec![255, 0]);
+        encoder.write_header().unwrap().write_image_data(&[0, 1]).unwrap();
+
+        // An app changes the first palette color in memory and leaves the CRC of PLTE as it was.
+        let palette = data.windows(4).position(|x| x == b"PLTE").unwrap() + 4;
+        data[palette..palette + 3].copy_from_slice(&[0, 255, 0]);
+
+        let image = super::decode_image(&data).unwrap();
+        assert_eq!((image.width(), image.height()), (2, 1));
+        let first = image.get_pixel(0, 0);
+        assert_eq!((first.r, first.g, first.b, first.a), (0, 255, 0, 255));
+        assert_eq!(image.get_pixel(1, 0).a, 0);
     }
 
     #[test]
