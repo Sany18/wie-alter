@@ -2,10 +2,11 @@
 extern crate alloc;
 
 pub mod classes;
+mod tone_sequence;
 
 use wie_jvm_support::WieJavaClassProto;
 
-pub fn get_protos() -> [WieJavaClassProto; 53] {
+pub fn get_protos() -> [WieJavaClassProto; 55] {
     [
         classes::javax::microedition::io::Connection::as_proto(),
         classes::javax::microedition::io::ConnectionNotFoundException::as_proto(),
@@ -40,6 +41,7 @@ pub fn get_protos() -> [WieJavaClassProto; 53] {
         classes::javax::microedition::media::Manager::as_proto(),
         classes::javax::microedition::media::MediaException::as_proto(),
         classes::javax::microedition::media::Player::as_proto(),
+        classes::javax::microedition::media::control::ToneControl::as_proto(),
         classes::javax::microedition::media::control::VolumeControl::as_proto(),
         classes::javax::microedition::media::PlayerListener::as_proto(),
         classes::javax::microedition::midlet::MIDlet::as_proto(),
@@ -56,6 +58,7 @@ pub fn get_protos() -> [WieJavaClassProto; 53] {
         classes::net::wie::EventQueue::as_proto(),
         classes::net::wie::ItemStateEvent::as_proto(),
         classes::net::wie::Launcher::as_proto(),
+        classes::net::wie::PlayerToneControl::as_proto(),
         classes::net::wie::PlayerVolumeControl::as_proto(),
         classes::net::wie::RecordEnumeration::as_proto(),
         classes::net::wie::SmafPlayer::as_proto(),
