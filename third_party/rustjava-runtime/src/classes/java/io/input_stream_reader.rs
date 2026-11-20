@@ -1,0 +1,291 @@
+use core::cmp::min;
+
+use alloc::{vec, vec::Vec};
+
+use bytemuck::{cast_slice, cast_vec};
+use encoding_rs::{EUC_KR, UTF_8};
+
+use jvm::{Array, ClassInstanceRef, JavaChar, Jvm, Result, runtime::JavaLangString};
+use jvm_class_proto::{JavaFieldProto, JavaMethodProto};
+use jvm_types::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
+
+use crate::{
+    RuntimeClassProto, RuntimeContext,
+    classes::java::{io::InputStream, lang::System},
+};
+
+const BUF_SIZE: usize = 10;
+
+// class java.io.InputStreamReader
+pub struct InputStreamReader;
+
+impl InputStreamReader {
+    pub fn as_proto() -> RuntimeClassProto {
+        RuntimeClassProto {
+            name: "java/io/InputStreamReader",
+            parent_class: Some("java/io/Reader"),
+            interfaces: vec![],
+            methods: vec![
+                JavaMethodProto::new("<init>", "(Ljava/io/InputStream;)V", Self::init, MethodAccessFlags::PUBLIC),
+                JavaMethodProto::new(
+                    "<init>",
+                    "(Ljava/io/InputStream;Ljava/lang/String;)V",
+                    Self::init_with_charset,
+                    MethodAccessFlags::PUBLIC,
+                ),
+                JavaMethodProto::new("read", "([CII)I", Self::read, MethodAccessFlags::PUBLIC),
+                JavaMethodProto::new("ready", "()Z", Self::ready, MethodAccessFlags::PUBLIC),
+                JavaMethodProto::new("close", "()V", Self::close, MethodAccessFlags::PUBLIC),
+            ],
+            fields: vec![
+                JavaFieldProto::new("in", "Ljava/io/InputStream;", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("readBuf", "[B", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("readBufSize", "I", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("writeBuf", "[C", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("writeBufSize", "I", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("charset", "Ljava/lang/String;", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("endOfInput", "Z", FieldAccessFlags::PRIVATE),
+            ],
+            access_flags: ClassAccessFlags::PUBLIC,
+        }
+    }
+
+    async fn init(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Self>, r#in: ClassInstanceRef<InputStream>) -> Result<()> {
+        tracing::debug!("java.io.InputStreamReader::<init>({this:?}, {:?})", &r#in);
+
+        let charset = System::get_charset(jvm).await?;
+        let charset_java = JavaLangString::from_rust_string(jvm, &charset).await?;
+        jvm.invoke_special(
+            &this,
+            "java/io/InputStreamReader",
+            "<init>",
+            "(Ljava/io/InputStream;Ljava/lang/String;)V",
+            (r#in, charset_java),
+        )
+        .await
+    }
+
+    async fn init_with_charset(
+        jvm: &Jvm,
+        _: &mut RuntimeContext,
+        mut this: ClassInstanceRef<Self>,
+        r#in: ClassInstanceRef<InputStream>,
+        charset: ClassInstanceRef<crate::classes::java::lang::String>,
+    ) -> Result<()> {
+        tracing::debug!("java.io.InputStreamReader::<init>({this:?}, {in:?}, {charset:?})", in = &r#in);
+
+        if r#in.is_null() || charset.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "input or encoding is null").await);
+        }
+
+        let charset_name = JavaLangString::to_rust_string(jvm, &charset).await?.to_ascii_uppercase();
+        let charset_name = match charset_name.as_str() {
+            "UTF-8" | "UTF8" => "UTF-8",
+            "EUC-KR" | "EUCKR" | "KS-C-5601-1987" | "MS949" | "CP949" => "EUC-KR",
+            "ISO-8859-1" | "ISO8859-1" | "ISO8859_1" | "LATIN1" => "ISO-8859-1",
+            "US-ASCII" | "ASCII" => "US-ASCII",
+            _ => return Err(jvm.exception("java/io/UnsupportedEncodingException", &charset_name).await),
+        };
+
+        let _: () = jvm.invoke_special(&this, "java/io/Reader", "<init>", "()V", ()).await?;
+        let charset = JavaLangString::from_rust_string(jvm, charset_name).await?;
+        jvm.put_field(&mut this, "java/io/InputStreamReader", "charset", "Ljava/lang/String;", charset)
+            .await?;
+
+        let read_buf = jvm.instantiate_array("B", BUF_SIZE).await?;
+        jvm.put_field(&mut this, "java/io/InputStreamReader", "readBuf", "[B", read_buf).await?;
+        jvm.put_field(&mut this, "java/io/InputStreamReader", "readBufSize", "I", 0).await?;
+
+        let write_buf = jvm.instantiate_array("C", BUF_SIZE * 3).await?;
+        jvm.put_field(&mut this, "java/io/InputStreamReader", "writeBuf", "[C", write_buf).await?;
+        jvm.put_field(&mut this, "java/io/InputStreamReader", "writeBufSize", "I", 0).await?;
+        jvm.put_field(&mut this, "java/io/InputStreamReader", "endOfInput", "Z", false).await?;
+
+        jvm.put_field(&mut this, "java/io/InputStreamReader", "in", "Ljava/io/InputStream;", r#in)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn read(
+        jvm: &Jvm,
+        _: &mut RuntimeContext,
+        mut this: ClassInstanceRef<Self>,
+        buf: ClassInstanceRef<Array<JavaChar>>,
+        offset: i32,
+        length: i32,
+    ) -> Result<i32> {
+        tracing::debug!("java.io.InputStreamReader::read({this:?}, {buf:?}, {offset:?}, {length:?})");
+        if buf.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "argument is null").await);
+        }
+
+        let destination_length = jvm.array_length(&buf).await? as i32;
+        if offset < 0 || length < 0 || offset > destination_length - length {
+            return Err(jvm.exception("java/lang/IndexOutOfBoundsException", "Invalid offset or length").await);
+        }
+        if length == 0 {
+            return Ok(0);
+        }
+
+        let r#in = jvm.get_field(&this, "java/io/InputStreamReader", "in", "Ljava/io/InputStream;").await?;
+        let mut write_buf: ClassInstanceRef<Array<JavaChar>> = jvm.get_field(&this, "java/io/InputStreamReader", "writeBuf", "[C").await?;
+        let mut copied = 0;
+
+        loop {
+            let write_buf_size: i32 = jvm.get_field(&this, "java/io/InputStreamReader", "writeBufSize", "I").await?;
+            let to_copy = min(length - copied, write_buf_size);
+            if to_copy > 0 {
+                let _: () = jvm
+                    .invoke_static(
+                        "java/lang/System",
+                        "arraycopy",
+                        "(Ljava/lang/Object;ILjava/lang/Object;II)V",
+                        (write_buf.clone(), 0, buf.clone(), offset + copied, to_copy),
+                    )
+                    .await?;
+                let _: () = jvm
+                    .invoke_static(
+                        "java/lang/System",
+                        "arraycopy",
+                        "(Ljava/lang/Object;ILjava/lang/Object;II)V",
+                        (write_buf.clone(), to_copy, write_buf.clone(), 0, write_buf_size - to_copy),
+                    )
+                    .await?;
+                jvm.put_field(&mut this, "java/io/InputStreamReader", "writeBufSize", "I", write_buf_size - to_copy)
+                    .await?;
+                copied += to_copy;
+            }
+
+            let mut end_of_input: bool = jvm.get_field(&this, "java/io/InputStreamReader", "endOfInput", "Z").await?;
+            if copied == length || end_of_input {
+                break;
+            }
+            // Once characters are available, do not wait for more input to fill the caller's buffer.
+            if copied > 0 {
+                let available: i32 = jvm.invoke_virtual(&r#in, "java/io/InputStream", "available", "()I", ()).await?;
+                if available == 0 {
+                    break;
+                }
+            }
+
+            let read_buf: ClassInstanceRef<Array<i8>> = jvm.get_field(&this, "java/io/InputStreamReader", "readBuf", "[B").await?;
+            let mut read_buf_size: i32 = jvm.get_field(&this, "java/io/InputStreamReader", "readBufSize", "I").await?;
+            let read: i32 = jvm
+                .invoke_virtual(
+                    &r#in,
+                    "java/io/InputStream",
+                    "read",
+                    "([BII)I",
+                    (read_buf.clone(), read_buf_size, BUF_SIZE as i32 - read_buf_size),
+                )
+                .await?;
+            if read == -1 {
+                end_of_input = true;
+                jvm.put_field(&mut this, "java/io/InputStreamReader", "endOfInput", "Z", true).await?;
+            } else {
+                read_buf_size += read;
+            }
+
+            let mut read_buf_data = vec![0; read_buf_size as _];
+            jvm.array_raw_buffer(&read_buf).await?.read(0, &mut read_buf_data)?;
+
+            let charset_ref = jvm.get_field(&this, "java/io/InputStreamReader", "charset", "Ljava/lang/String;").await?;
+            let charset = JavaLangString::to_rust_string(jvm, &charset_ref).await?;
+            // ISO-8859-1 (and US-ASCII, its lower half) is one char per byte, with the byte's value
+            let mut decoder = if charset == "UTF-8" {
+                Some(UTF_8.new_decoder_without_bom_handling())
+            } else if charset == "EUC-KR" {
+                Some(EUC_KR.new_decoder_without_bom_handling())
+            } else if charset == "ISO-8859-1" || charset == "US-ASCII" {
+                None
+            } else {
+                return Err(jvm.exception("java/io/UnsupportedEncodingException", &charset).await);
+            };
+
+            let read_buf_data: Vec<u8> = cast_vec(read_buf_data);
+            let mut decode_length = read_buf_data.len();
+            if !end_of_input && charset == "UTF-8" && decode_length > 0 {
+                let mut lead_index = decode_length - 1;
+                while lead_index > 0 && read_buf_data[lead_index] & 0xc0 == 0x80 {
+                    lead_index -= 1;
+                }
+                let expected_length = match read_buf_data[lead_index] {
+                    0xc0..=0xdf => 2,
+                    0xe0..=0xef => 3,
+                    0xf0..=0xf7 => 4,
+                    _ => 1,
+                };
+                if decode_length - lead_index < expected_length {
+                    decode_length = lead_index;
+                }
+            } else if !end_of_input && charset == "EUC-KR" {
+                let mut index = 0;
+                while index < decode_length {
+                    if (0x81..=0xfe).contains(&read_buf_data[index]) {
+                        if index + 1 == decode_length {
+                            decode_length = index;
+                            break;
+                        }
+                        index += 2;
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+
+            let mut decoded = vec![0; BUF_SIZE * 3];
+            let (read, wrote) = if let Some(decoder) = decoder.as_mut() {
+                let (_, read, wrote, _) = decoder.decode_to_utf16(&read_buf_data[..decode_length], &mut decoded, end_of_input);
+                (read, wrote)
+            } else {
+                for (char, byte) in decoded.iter_mut().zip(&read_buf_data[..decode_length]) {
+                    *char = *byte as u16;
+                }
+                (decode_length, decode_length)
+            };
+
+            // advance readBuf
+            let _: () = jvm
+                .invoke_static(
+                    "java/lang/System",
+                    "arraycopy",
+                    "(Ljava/lang/Object;ILjava/lang/Object;II)V",
+                    (read_buf.clone(), read as i32, read_buf, 0, (read_buf_size - read as i32)),
+                )
+                .await?;
+            jvm.put_field(&mut this, "java/io/InputStreamReader", "readBufSize", "I", read_buf_size - read as i32)
+                .await?;
+
+            // The previous output was drained before reading another chunk.
+            jvm.store_array(&mut write_buf, 0, cast_slice::<u16, JavaChar>(&decoded[..wrote]).to_vec())
+                .await?;
+            jvm.put_field(&mut this, "java/io/InputStreamReader", "writeBufSize", "I", wrote as i32)
+                .await?;
+        }
+
+        Ok(if copied == 0 { -1 } else { copied })
+    }
+
+    async fn close(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Self>) -> Result<()> {
+        tracing::debug!("java.io.InputStreamReader::close({this:?})");
+
+        let r#in = jvm.get_field(&this, "java/io/InputStreamReader", "in", "Ljava/io/InputStream;").await?;
+        let _: () = jvm.invoke_virtual(&r#in, "java/io/InputStream", "close", "()V", ()).await?;
+
+        Ok(())
+    }
+
+    async fn ready(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Self>) -> Result<bool> {
+        tracing::debug!("java.io.InputStreamReader::ready({this:?})");
+
+        let write_buf_size: i32 = jvm.get_field(&this, "java/io/InputStreamReader", "writeBufSize", "I").await?;
+        if write_buf_size > 0 {
+            return Ok(true);
+        }
+
+        let r#in = jvm.get_field(&this, "java/io/InputStreamReader", "in", "Ljava/io/InputStream;").await?;
+        let available: i32 = jvm.invoke_virtual(&r#in, "java/io/InputStream", "available", "()I", ()).await?;
+        Ok(available > 0)
+    }
+}

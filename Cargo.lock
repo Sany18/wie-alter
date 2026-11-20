@@ -5166,8 +5166,6 @@ dependencies = [
 [[package]]
 name = "rustjava-runtime"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec340d178242e00fcfbabcf6cf9af813a943e3b62328374302d69d36fd109cb8"
 dependencies = [
  "async-trait",
  "bytemuck",

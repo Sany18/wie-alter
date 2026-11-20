@@ -1,0 +1,85 @@
+use alloc::vec;
+
+use jvm::{ClassInstanceRef, JavaError, Result, runtime::JavaLangString};
+use rustjava_runtime::classes::{
+    java::lang::{Class, ClassLoader},
+    org::rustjava::lang::RustJarClassLoader,
+};
+
+use test_utils::test_jvm;
+
+#[tokio::test]
+async fn test_rustjar_null_inputs() -> Result<()> {
+    let jvm = test_jvm().await?;
+    let result = jvm
+        .new_class(
+            "org/rustjava/lang/RustJarClassLoader",
+            "([Ljava/lang/String;Ljava/lang/ClassLoader;)V",
+            (None, None),
+        )
+        .await;
+    let Err(JavaError::JavaException(exception)) = result else {
+        panic!("null classPaths must throw NullPointerException");
+    };
+    assert!(jvm.is_instance(&*exception, "java/lang/NullPointerException"));
+
+    let class_paths = jvm.instantiate_array("Ljava/lang/String;", 1).await?;
+    let loader = jvm
+        .new_class(
+            "org/rustjava/lang/RustJarClassLoader",
+            "([Ljava/lang/String;Ljava/lang/ClassLoader;)V",
+            (class_paths, None),
+        )
+        .await?;
+    let name = JavaLangString::from_rust_string(&jvm, "java/util/Random").await?;
+    for name in [None, Some(name)] {
+        let result: Result<ClassInstanceRef<Class>> = jvm
+            .invoke_virtual(
+                &loader,
+                "org/rustjava/lang/RustJarClassLoader",
+                "findClass",
+                "(Ljava/lang/String;)Ljava/lang/Class;",
+                (name,),
+            )
+            .await;
+        let Err(JavaError::JavaException(exception)) = result else {
+            panic!("null name or classPath must throw NullPointerException");
+        };
+        assert!(jvm.is_instance(&*exception, "java/lang/NullPointerException"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_find_class_uses_rustjar_runtime_source() -> Result<()> {
+    let jvm = test_jvm().await?;
+
+    let class_path = JavaLangString::from_rust_string(&jvm, "rt.rustjar").await?;
+    let mut class_paths = jvm.instantiate_array("Ljava/lang/String;", 1).await?;
+    jvm.store_array(&mut class_paths, 0, vec![class_path]).await?;
+    let class_loader: ClassInstanceRef<RustJarClassLoader> = jvm
+        .new_class(
+            "org/rustjava/lang/RustJarClassLoader",
+            "([Ljava/lang/String;Ljava/lang/ClassLoader;)V",
+            (class_paths, None),
+        )
+        .await?
+        .into();
+
+    let name = JavaLangString::from_rust_string(&jvm, "java/util/Random").await?;
+    let class: ClassInstanceRef<Class> = jvm
+        .invoke_virtual(
+            &class_loader,
+            "org/rustjava/lang/RustJarClassLoader",
+            "findClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            (name,),
+        )
+        .await?;
+    assert!(!class.is_null());
+
+    let defining_loader: ClassInstanceRef<ClassLoader> = jvm.get_field(&class, "java/lang/Class", "classLoader", "Ljava/lang/ClassLoader;").await?;
+    assert!(jvm.is_instance(&**defining_loader, "org/rustjava/lang/RustJarClassLoader"));
+
+    Ok(())
+}

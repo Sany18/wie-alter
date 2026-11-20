@@ -154,7 +154,8 @@ impl J2MEEmulator {
             .into_iter()
             .map(|(k, v)| (format!("wie.appProperty.{k}"), v))
             .collect::<Vec<_>>();
-        let properties = [("microedition.platform", "wie")]
+        // CLDC's default encoding: one char per byte, as the games outside Korea expect from new String(bytes) and getBytes().
+        let properties = [("microedition.platform", "wie"), ("file.encoding", "ISO-8859-1")]
             .into_iter()
             .chain(properties.iter().map(|(k, v)| (k.as_ref(), v.as_ref())))
             .collect::<Vec<_>>();
