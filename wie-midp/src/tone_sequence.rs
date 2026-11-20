@@ -1,6 +1,6 @@
-// MMAPI tones (Manager.playTone, ToneControl.setSequence) as MIDI events of the system audio.
+// MMAPI tones (Manager.playTone, ToneControl.setSequence, iMelody data) as MIDI events of the system audio.
 
-use alloc::{vec, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
 
 use wie_backend::{AudioEventData, AudioSequence, TimedAudioEvent};
 
@@ -179,13 +179,153 @@ fn play_note(tones: &mut Tones, note: i8, duration_ms: u64) -> Option<()> {
     Some(())
 }
 
+// iMelody (BEGIN:IMELODY ... END:IMELODY): the BEAT and VOLUME headers and the MELODY line of notes ("*5#c3."),
+// rests ("r2"), volume changes ("V+", "V-", "V9") and repeats ("(...@2)"); light and vibration marks are skipped.
+// None for data that is not iMelody.
+pub fn parse_imelody(data: &[u8]) -> Option<AudioSequence> {
+    let text = String::from_utf8_lossy(data);
+    let mut lines = text.lines().map(str::trim);
+    if !lines.next()?.eq_ignore_ascii_case("BEGIN:IMELODY") {
+        return None;
+    }
+
+    let mut beat = 120;
+    let mut volume = 7;
+    let mut melody = None;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        match name.to_ascii_uppercase().as_str() {
+            "BEAT" => beat = value.trim().parse::<u64>().ok().filter(|beat| (25..=900).contains(beat))?,
+            "VOLUME" => volume = value.trim().trim_start_matches(['V', 'v']).parse::<i32>().unwrap_or(7),
+            "MELODY" => melody = Some(value.trim().to_ascii_lowercase()),
+            _ => {}
+        }
+    }
+
+    let melody = melody?.into_bytes();
+    let mut tones = Tones::new(imelody_volume(volume));
+    let whole_note_ms = 240_000 / beat;
+    imelody_events(&melody, whole_note_ms, &mut MelodyState { octave: 4, volume }, &mut tones, 0)?;
+
+    Some(tones.into_sequence())
+}
+
+// iMelody volumes are 0..=15.
+fn imelody_volume(volume: i32) -> i32 {
+    volume.clamp(0, 15) * 100 / 15
+}
+
+// Plays the melody from `index` to its end or to the end of the repeat it is in; returns where it stopped.
+// The octave and volume a melody sets last, also inside and after repeats.
+struct MelodyState {
+    octave: i32,
+    volume: i32,
+}
+
+fn imelody_events(melody: &[u8], whole_note_ms: u64, state: &mut MelodyState, tones: &mut Tones, mut index: usize) -> Option<usize> {
+    const MARKS: [&[u8]; 6] = [b"ledon", b"ledoff", b"vibeon", b"vibeoff", b"backon", b"backoff"];
+
+    while index < melody.len() {
+        let rest = &melody[index..];
+        if let Some(mark) = MARKS.iter().find(|mark| rest.starts_with(mark)) {
+            index += mark.len();
+            continue;
+        }
+        match rest[0] {
+            b' ' | b'\t' => index += 1,
+            b'(' => {
+                let start = index + 1;
+                let end = imelody_events(melody, whole_note_ms, state, tones, start)?;
+                // "@n)": n times in all, 0 for ever (taken as twice here, the sequence has an end).
+                let count_start = end + 1;
+                let count_end = count_start + melody[count_start..].iter().take_while(|c| c.is_ascii_digit()).count();
+                let count: usize = core::str::from_utf8(&melody[count_start..count_end]).ok()?.parse().ok()?;
+                for _ in 1..count.clamp(2, 16) {
+                    imelody_events(melody, whole_note_ms, state, tones, start)?;
+                }
+                index = count_end;
+                if melody.get(index) == Some(&b')') {
+                    index += 1;
+                }
+            }
+            b'@' => return Some(index),
+            b')' => index += 1,
+            b'*' => {
+                state.octave = (*melody.get(index + 1)? as char).to_digit(10)? as i32;
+                index += 2;
+            }
+            b'v' => {
+                index += 1;
+                match melody.get(index) {
+                    Some(b'+') => {
+                        state.volume = (state.volume + 1).min(15);
+                        index += 1;
+                    }
+                    Some(b'-') => {
+                        state.volume = (state.volume - 1).max(0);
+                        index += 1;
+                    }
+                    _ => {
+                        let digits = melody[index..].iter().take_while(|c| c.is_ascii_digit()).count();
+                        state.volume = core::str::from_utf8(&melody[index..index + digits]).ok()?.parse().ok()?;
+                        index += digits;
+                    }
+                }
+                tones.velocity = velocity(imelody_volume(state.volume));
+            }
+            _ => {
+                let mut shift = 0;
+                match rest[0] {
+                    b'#' => shift = 1,
+                    b'&' => shift = -1,
+                    _ => {}
+                }
+                if shift != 0 {
+                    index += 1;
+                }
+                let name = *melody.get(index)?;
+                let semitone = match name {
+                    b'c' => Some(0),
+                    b'd' => Some(2),
+                    b'e' => Some(4),
+                    b'f' => Some(5),
+                    b'g' => Some(7),
+                    b'a' => Some(9),
+                    b'b' => Some(11),
+                    b'r' => None,
+                    _ => return None,
+                };
+                let duration = (*melody.get(index + 1)? as char).to_digit(10).filter(|duration| *duration <= 5)?;
+                index += 2;
+                let mut duration_ms = whole_note_ms >> duration;
+                match melody.get(index) {
+                    Some(b'.') => duration_ms = duration_ms * 3 / 2,
+                    Some(b':') => duration_ms = duration_ms * 7 / 4,
+                    Some(b';') => duration_ms = duration_ms * 2 / 3,
+                    _ => index -= 1,
+                }
+                index += 1;
+                match semitone {
+                    // Octave *4 has a = 880 Hz.
+                    Some(semitone) => tones.note((12 * (state.octave + 2) + semitone + shift).clamp(0, 127) as u8, duration_ms),
+                    None => tones.silence(duration_ms),
+                }
+            }
+        }
+    }
+
+    Some(index)
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
 
     use wie_backend::AudioEventData;
 
-    use super::{parse_tone_sequence, single_tone};
+    use super::{parse_imelody, parse_tone_sequence, single_tone};
 
     fn notes(sequence: &wie_backend::AudioSequence) -> Vec<(u64, u8)> {
         sequence
@@ -222,5 +362,18 @@ mod tests {
 
         assert_eq!(notes(&sequence), [(0, 69)]);
         assert_eq!(sequence.duration, 200);
+    }
+
+    #[test]
+    fn imelody_plays_notes_rests_and_repeats() {
+        // Beat 120: a quarter note (duration 2) is 500 ms.
+        let data = b"BEGIN:IMELODY\r\nVERSION:1.2\r\nBEAT:120\r\nMELODY:*4a2 r2 *5(#c3@2) ledon &b2.\r\nEND:IMELODY\r\n";
+        let sequence = parse_imelody(data).unwrap();
+
+        assert_eq!(notes(&sequence), [(0, 81), (1000, 85), (1250, 85), (1500, 94)]);
+        assert_eq!(sequence.duration, 2250);
+
+        assert!(parse_imelody(b"MThd").is_none());
+        assert!(parse_imelody(b"BEGIN:IMELODY\nMELODY:x2\nEND:IMELODY").is_none());
     }
 }

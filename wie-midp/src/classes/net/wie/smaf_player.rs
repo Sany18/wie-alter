@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 
 use jvm::{
     Array, ClassInstance, ClassInstanceRef, Jvm, Result,
@@ -14,13 +14,16 @@ use rustjava_runtime::classes::java::{
 use wie_backend::AudioSequence;
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
-use crate::classes::{
-    javax::microedition::media::{Control, PlayerListener},
-    net::wie::{PlayerToneControl, PlayerVolumeControl},
+use crate::{
+    classes::{
+        javax::microedition::media::{Control, PlayerListener},
+        net::wie::{PlayerToneControl, PlayerVolumeControl},
+    },
+    tone_sequence::{parse_imelody, parse_tone_sequence},
 };
 
 // class net.wie.SmafPlayer
-// Plays SMAF, Standard MIDI and PCM WAVE data through the system audio.
+// Plays SMAF, Standard MIDI, PCM WAVE, iMelody and tone sequence data through the system audio.
 pub struct SmafPlayer;
 
 impl SmafPlayer {
@@ -102,14 +105,24 @@ impl SmafPlayer {
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
 
         let data = JavaIoInputStream::read_until_end(jvm, &stream).await?;
-        // A MIDI or WAVE file by its header; anything else is taken as SMAF, as before.
+        // The format by its header: MIDI, WAVE, iMelody or a tone sequence; anything else is taken as SMAF.
+        let system = context.system();
         let audio_handle = if data.starts_with(b"MThd") || data.starts_with(b"RIFF") {
-            match context.system().audio().load(&data) {
-                Ok(handle) => handle,
-                Err(_) => return Err(jvm.exception("javax/microedition/media/MediaException", "Unsupported media data").await),
-            }
+            system.audio().load(&data).ok()
+        } else if data
+            .trim_ascii_start()
+            .get(..13)
+            .is_some_and(|start| start.eq_ignore_ascii_case(b"BEGIN:IMELODY"))
+        {
+            parse_imelody(&data).map(|sequence| system.audio().load_sequence(sequence))
+        } else if data.starts_with(&[0xfe, 1]) {
+            let data: Vec<i8> = data.iter().map(|byte| *byte as i8).collect();
+            parse_tone_sequence(&data).map(|sequence| system.audio().load_sequence(sequence))
         } else {
-            context.system().audio().load_smaf(&data).unwrap()
+            system.audio().load_smaf(&data).ok()
+        };
+        let Some(audio_handle) = audio_handle else {
+            return Err(jvm.exception("javax/microedition/media/MediaException", "Unsupported media data").await);
         };
 
         jvm.put_field(&mut this, "net/wie/SmafPlayer", "audioHandle", "I", audio_handle as i32)

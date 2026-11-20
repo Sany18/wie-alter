@@ -9,9 +9,13 @@ use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
 use crate::{classes::javax::microedition::media::Player, tone_sequence::single_tone};
 
-// The names games give Standard MIDI and WAVE data (net.wie.SmafPlayer tells the formats apart by their headers).
+// The names games give SMAF, Standard MIDI, WAVE, iMelody and tone sequence data (net.wie.SmafPlayer tells the formats
+// apart by their headers).
+const SMAF_TYPES: [&str; 5] = ["application/vnd.smaf", "application/x-smaf", "audio/x-smaf", "audio/mmf", "audio/x-mmf"];
 const MIDI_TYPES: [&str; 5] = ["audio/midi", "audio/mid", "audio/x-midi", "audio/x-mid", "audio/sp-midi"];
 const WAVE_TYPES: [&str; 4] = ["audio/x-wav", "audio/wav", "audio/wave", "audio/x-wave"];
+const IMELODY_TYPES: [&str; 4] = ["audio/imelody", "audio/x-imelody", "text/x-imelody", "audio/imy"];
+const TONE_SEQUENCE_TYPES: [&str; 1] = ["audio/x-tone-seq"];
 const TONE_DEVICE_LOCATOR: &str = "device://tone";
 
 // class javax.microedition.media.Manager
@@ -84,11 +88,10 @@ impl Manager {
             JavaLangString::to_rust_string(jvm, &r#type).await?
         };
         let type_string = type_string.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
-        if type_string.is_empty()
-            || type_string == "application/vnd.smaf"
-            || MIDI_TYPES.contains(&type_string.as_str())
-            || WAVE_TYPES.contains(&type_string.as_str())
-        {
+        let supported = [&SMAF_TYPES[..], &MIDI_TYPES, &WAVE_TYPES, &IMELODY_TYPES, &TONE_SEQUENCE_TYPES]
+            .iter()
+            .any(|types| types.contains(&type_string.as_str()));
+        if type_string.is_empty() || supported {
             Ok(jvm.new_class("net/wie/SmafPlayer", "(Ljava/io/InputStream;)V", (stream,)).await?.into())
         } else {
             Err(jvm.exception("javax/microedition/media/MediaException", "Unsupported media type").await)
@@ -150,7 +153,7 @@ impl Manager {
     ) -> Result<ClassInstanceRef<Array<String>>> {
         tracing::debug!("javax.microedition.media.Manager::getSupportedContentTypes({protocol:?})");
 
-        let supported = ["application/vnd.smaf", MIDI_TYPES[0], WAVE_TYPES[0]];
+        let supported = [SMAF_TYPES[0], MIDI_TYPES[0], WAVE_TYPES[0], IMELODY_TYPES[0], TONE_SEQUENCE_TYPES[0]];
         let count = if protocol.is_null() { supported.len() } else { 0 };
         let mut types = jvm.instantiate_array("Ljava/lang/String;", count).await?;
         for (index, content_type) in supported.iter().take(count).enumerate() {
@@ -186,7 +189,7 @@ mod test {
                     (None,),
                 )
                 .await?;
-            assert_eq!(jvm.array_length(&content_types).await?, 3);
+            assert_eq!(jvm.array_length(&content_types).await?, 5);
             let content_type: ClassInstanceRef<String> = jvm.load_array(&content_types, 0, 1).await?.remove(0);
             assert_eq!(JavaLangString::to_rust_string(&jvm, &content_type).await?, "application/vnd.smaf");
             for protocol in ["http", "file", "", "unknown"] {
