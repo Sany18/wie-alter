@@ -37,14 +37,15 @@ pub fn wrap(font: &Font, text: &str, pt_size: f32, maximum_width: Option<i32>) -
         let mut start = 0;
         while start < characters.len() {
             let mut end = start;
-            let mut width = 0;
+            let mut line = String::new();
             let mut word_boundary = None;
             while end < characters.len() {
-                let character_width = string_width(font, &characters[end].to_string(), pt_size).ceil() as i32;
-                if end > start && width + character_width > maximum_width {
+                // The width of the whole line, as preferred_width measures it: rounding each character up would
+                // make a line wider than the width its item was given for it.
+                line.push(characters[end]);
+                if end > start && string_width(font, &line, pt_size).ceil() as i32 > maximum_width {
                     break;
                 }
-                width += character_width;
                 end += 1;
                 if characters[end - 1].is_whitespace() {
                     word_boundary = Some(end);
@@ -72,7 +73,7 @@ pub fn wrap(font: &Font, text: &str, pt_size: f32, maximum_width: Option<i32>) -
 mod test {
     use crate::canvas::{Font, string_width};
 
-    use super::wrap;
+    use super::{preferred_width, wrap};
 
     #[test]
     fn preserves_explicit_newlines_and_prefers_word_boundaries() {
@@ -86,5 +87,14 @@ mod test {
         let font = Font::try_from_static(include_bytes!("../../assets/neodgm.ttf")).unwrap();
         let width = string_width(&font, "ab", 10.0).ceil() as i32;
         assert_eq!(wrap(&font, "abcdef", 10.0, Some(width)), ["ab", "cd", "ef"]);
+    }
+
+    #[test]
+    fn a_line_fits_its_preferred_width() {
+        let font = Font::try_from_static(include_bytes!("../../assets/neodgm.ttf")).unwrap();
+        for text in ["Outdoor", "Julian", "Moorhen", "Doug", "iiiiiiil"] {
+            let width = preferred_width(&font, text, 10.0);
+            assert_eq!(wrap(&font, text, 10.0, Some(width)), [text]);
+        }
     }
 }
