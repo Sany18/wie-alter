@@ -150,6 +150,7 @@ impl Display {
                 JavaFieldProto::new("height", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("paintDisabled", "Z", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("repaintPending", "Z", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("painting", "Z", FieldAccessFlags::PRIVATE | FieldAccessFlags::STATIC),
                 JavaFieldProto::new("repaintLeft", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("repaintTop", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("repaintRight", "I", FieldAccessFlags::PRIVATE),
@@ -1071,9 +1072,23 @@ impl Display {
         Ok(())
     }
 
-    async fn handle_paint_event(jvm: &Jvm, context: &mut WieJvmContext, mut this: ClassInstanceRef<Self>) -> JvmResult<()> {
+    async fn handle_paint_event(jvm: &Jvm, context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
         tracing::debug!("javax.microedition.lcdui.Display::handlePaintEvent({this:?})");
 
+        // One paint at a time: the threads that paint (the event loop, serviceRepaints of an app thread) share the
+        // screen's graphics, and apps expect paint calls to be serialized. A paint requested while another one runs is
+        // left pending for the next cycle; waiting for it could keep the event loop from input for as long as an app
+        // thread keeps painting.
+        if jvm.get_static_field("javax/microedition/lcdui/Display", "painting", "Z").await? {
+            return Ok(());
+        }
+        jvm.put_static_field("javax/microedition/lcdui/Display", "painting", "Z", true).await?;
+        let result = Self::paint(jvm, context, this).await;
+        jvm.put_static_field("javax/microedition/lcdui/Display", "painting", "Z", false).await?;
+        result
+    }
+
+    async fn paint(jvm: &Jvm, context: &mut WieJvmContext, mut this: ClassInstanceRef<Self>) -> JvmResult<()> {
         let dirty_bounds = if jvm
             .get_field::<bool>(&this, "javax/microedition/lcdui/Display", "repaintPending", "Z")
             .await?
