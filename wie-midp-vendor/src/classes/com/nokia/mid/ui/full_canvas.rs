@@ -7,7 +7,7 @@ use jvm_types::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::{
     javax::microedition::lcdui::{Command, CommandListener},
-    net::wie::{NOKIA_KEY_CODES, from_nokia_key_code, to_nokia_key_code},
+    net::wie::NOKIA_KEY_CODES,
 };
 
 const KEY_CODES: [(&str, i32, i32); 9] = NOKIA_KEY_CODES;
@@ -36,8 +36,6 @@ impl FullCanvas {
                     Self::set_command_listener,
                     MethodAccessFlags::PUBLIC,
                 ),
-                JavaMethodProto::new("getGameAction", "(I)I", Self::get_game_action, MethodAccessFlags::PUBLIC),
-                JavaMethodProto::new("getKeyCode", "(I)I", Self::get_key_code, MethodAccessFlags::PUBLIC),
             ],
             fields: KEY_CODES
                 .iter()
@@ -83,23 +81,6 @@ impl FullCanvas {
         Err(jvm
             .exception("java/lang/IllegalStateException", "FullCanvas does not support commands")
             .await)
-    }
-
-    async fn get_game_action(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, code: i32) -> JvmResult<i32> {
-        tracing::debug!("com.nokia.mid.ui.FullCanvas::getGameAction({this:?}, {code})");
-
-        let code = from_nokia_key_code(code);
-        jvm.invoke_special(&this, "javax/microedition/lcdui/Canvas", "getGameAction", "(I)I", (code,))
-            .await
-    }
-
-    async fn get_key_code(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, action: i32) -> JvmResult<i32> {
-        tracing::debug!("com.nokia.mid.ui.FullCanvas::getKeyCode({this:?}, {action})");
-
-        let code: i32 = jvm
-            .invoke_special(&this, "javax/microedition/lcdui/Canvas", "getKeyCode", "(I)I", (action,))
-            .await?;
-        Ok(to_nokia_key_code(code))
     }
 }
 
@@ -184,6 +165,13 @@ mod tests {
                     )
                     .await?;
                 assert_eq!(jvm.get_field::<i32>(&canvas, "test/FullCanvas", "pressed", "I").await?, -1);
+                // the soft keys have no game action, the arrows have theirs
+                for (code, action) in [(-6, 0), (-7, 0), (-2, 6), (-5, 8)] {
+                    let got: i32 = jvm
+                        .invoke_virtual(&canvas, "javax/microedition/lcdui/Canvas", "getGameAction", "(I)I", (code,))
+                        .await?;
+                    assert_eq!(got, action, "game action of {code}");
+                }
                 Ok(())
             },
         )

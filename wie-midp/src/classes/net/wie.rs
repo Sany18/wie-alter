@@ -12,7 +12,7 @@ mod wie_error;
 pub use self::{
     choice_element::ChoiceElement,
     command_event::CommandEvent,
-    event_queue::{EventQueue, KeyboardEventType, MIDPKeyCode, NOKIA_KEY_CODES, from_nokia_key_code, to_nokia_key_code},
+    event_queue::{EventQueue, KeyboardEventType, MIDPKeyCode, NOKIA_KEY_CODES, from_motorola_key_code, from_nokia_key_code, to_nokia_key_code},
     item_state_event::ItemStateEvent,
     launcher::Launcher,
     player_tone_control::PlayerToneControl,

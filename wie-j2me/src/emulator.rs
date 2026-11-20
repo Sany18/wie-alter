@@ -154,7 +154,8 @@ impl J2MEEmulator {
             .into_iter()
             .map(|(k, v)| (format!("wie.appProperty.{k}"), v))
             .collect::<Vec<_>>();
-        let properties = [("microedition.platform", "wie")]
+        // The key codes of most MIDP phones outside Korea (Nokia's, -1 to -7 for the arrows, select and soft keys).
+        let properties = [("microedition.platform", "wie"), ("wie.keyCodes", "nokia")]
             .into_iter()
             .chain(properties.iter().map(|(k, v)| (k.as_ref(), v.as_ref())))
             .collect::<Vec<_>>();

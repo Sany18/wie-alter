@@ -9,7 +9,7 @@ use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
 use crate::classes::{
     javax::microedition::lcdui::{Display, Graphics},
-    net::wie::{KeyboardEventType, MIDPKeyCode, from_nokia_key_code, to_nokia_key_code},
+    net::wie::{KeyboardEventType, MIDPKeyCode, from_motorola_key_code, from_nokia_key_code, to_nokia_key_code},
 };
 
 // abstract class javax.microedition.lcdui.Canvas
@@ -154,10 +154,16 @@ impl Canvas {
         Ok(())
     }
 
-    async fn get_game_action(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, key: i32) -> JvmResult<i32> {
+    async fn get_game_action(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, key: i32) -> JvmResult<i32> {
         tracing::debug!("javax.microedition.lcdui.Canvas::getGameAction({this:?}, {key})");
 
-        // A Nokia key code (-1 to -7, what a FullCanvas gets) means the same key as ours.
+        // A Nokia key code (-1 to -7, what a FullCanvas gets) means the same key as ours. Where the canvas gets Nokia's
+        // codes, ours for the soft keys and the like (6 to 10) never come, and those numbers are Motorola's arrows.
+        let key = if Self::uses_nokia_key_codes(jvm, &this).await? {
+            from_motorola_key_code(key)
+        } else {
+            key
+        };
         let action = match MIDPKeyCode::from_raw(from_nokia_key_code(key)) {
             Some(MIDPKeyCode::UP) => 1,        // UP
             Some(MIDPKeyCode::DOWN) => 6,      // DOWN
@@ -190,7 +196,11 @@ impl Canvas {
             _ => return Err(jvm.exception("java/lang/IllegalArgumentException", "Invalid game action").await),
         };
 
-        Ok(key as i32)
+        if Self::uses_nokia_key_codes(jvm, &this).await? {
+            Ok(to_nokia_key_code(key as i32))
+        } else {
+            Ok(key as i32)
+        }
     }
 
     async fn key_pressed(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, key: i32) -> JvmResult<()> {
@@ -305,8 +315,7 @@ impl Canvas {
         } else {
             return Err(jvm.exception("java/lang/IllegalArgumentException", "Invalid keyboard event type").await);
         };
-        // A Nokia FullCanvas gets Nokia's key codes: the vendor class, or one the jar ships (built on another phone's API).
-        let code = if jvm.is_instance(&**this, "com/nokia/mid/ui/FullCanvas") {
+        let code = if Self::uses_nokia_key_codes(jvm, &this).await? {
             to_nokia_key_code(code)
         } else {
             code
@@ -329,6 +338,20 @@ impl Canvas {
         }?;
 
         Ok(())
+    }
+
+    // Whether the canvas gets Nokia's key codes for the arrows, select and the soft keys (-1 to -7, which most MIDP
+    // phones outside Korea share and games compare against): a Nokia FullCanvas (the vendor class, or one the jar ships,
+    // built on another phone's API) always, any canvas when the platform sets the system property wie.keyCodes to nokia.
+    async fn uses_nokia_key_codes(jvm: &Jvm, this: &ClassInstanceRef<Self>) -> JvmResult<bool> {
+        if jvm.is_instance(&***this, "com/nokia/mid/ui/FullCanvas") {
+            return Ok(true);
+        }
+        let key = JavaLangString::from_rust_string(jvm, "wie.keyCodes").await?;
+        let value: ClassInstanceRef<String> = jvm
+            .invoke_static("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", (key,))
+            .await?;
+        Ok(!value.is_null() && JavaLangString::to_rust_string(jvm, &value).await? == "nokia")
     }
 
     async fn handle_paint_event(
@@ -623,6 +646,49 @@ mod test {
             let unknown: JvmResult<ClassInstanceRef<rustjava_runtime::classes::java::lang::String>> =
                 jvm.invoke_virtual(&canvas, class, "getKeyName", "(I)Ljava/lang/String;", (-99,)).await;
             assert!(unknown.is_ok(), "an unknown key code has a name too");
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn platform_with_nokia_key_codes() -> Result<()> {
+        run_jvm_test(Box::new([get_protos().into(), [RecordingCanvas::as_proto()].into()]), |jvm| async move {
+            let key = JavaLangString::from_rust_string(&jvm, "wie.keyCodes").await?;
+            let value = JavaLangString::from_rust_string(&jvm, "nokia").await?;
+            let _: ClassInstanceRef<()> = jvm
+                .invoke_static(
+                    "java/lang/System",
+                    "setProperty",
+                    "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;",
+                    (key, value),
+                )
+                .await?;
+            let class = "javax/microedition/lcdui/Canvas";
+            let canvas: ClassInstanceRef<Canvas> = jvm.new_class("javax/microedition/lcdui/TestRecordingCanvas", "()V", ()).await?.into();
+
+            for (key, nokia) in [(MIDPKeyCode::RIGHT_SOFT_KEY, -7), (MIDPKeyCode::FIRE, -5), (MIDPKeyCode::KEY_NUM5, 53)] {
+                let _: () = jvm
+                    .invoke_virtual(
+                        &canvas,
+                        class,
+                        "handleKeyEvent",
+                        "(II)V",
+                        (KeyboardEventType::KeyPressed as i32, key as i32),
+                    )
+                    .await?;
+                let pressed: i32 = jvm
+                    .get_field(&canvas, "javax/microedition/lcdui/TestRecordingCanvas", "pressed", "I")
+                    .await?;
+                assert_eq!(pressed, nokia);
+            }
+            let down: i32 = jvm.invoke_virtual(&canvas, class, "getKeyCode", "(I)I", (6,)).await?;
+            assert_eq!(down, -2);
+            // Motorola's arrows and select, which a converted game may pass on to getGameAction
+            for (code, action) in [(1, 1), (6, 6), (2, 2), (5, 5), (20, 8)] {
+                let got: i32 = jvm.invoke_virtual(&canvas, class, "getGameAction", "(I)I", (code,)).await?;
+                assert_eq!(got, action, "game action of Motorola key code {code}");
+            }
 
             Ok(())
         })
