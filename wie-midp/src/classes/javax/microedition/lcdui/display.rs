@@ -1071,9 +1071,25 @@ impl Display {
         Ok(())
     }
 
-    async fn handle_paint_event(jvm: &Jvm, context: &mut WieJvmContext, mut this: ClassInstanceRef<Self>) -> JvmResult<()> {
+    async fn handle_paint_event(jvm: &Jvm, context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
         tracing::debug!("javax.microedition.lcdui.Display::handlePaintEvent({this:?})");
 
+        // One paint at a time: the threads that paint (the event loop, serviceRepaints of an app thread) share the
+        // screen's graphics, and apps expect paint calls to be serialized.
+        let screen_graphics: ClassInstanceRef<Graphics> = jvm
+            .get_static_field(
+                "javax/microedition/lcdui/Display",
+                "screenGraphics",
+                "Ljavax/microedition/lcdui/Graphics;",
+            )
+            .await?;
+        jvm.monitor_enter(&screen_graphics).await?;
+        let result = Self::paint(jvm, context, this).await;
+        jvm.monitor_exit(&screen_graphics).await?;
+        result
+    }
+
+    async fn paint(jvm: &Jvm, context: &mut WieJvmContext, mut this: ClassInstanceRef<Self>) -> JvmResult<()> {
         let dirty_bounds = if jvm
             .get_field::<bool>(&this, "javax/microedition/lcdui/Display", "repaintPending", "Z")
             .await?
