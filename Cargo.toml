@@ -103,6 +103,8 @@ test-utils = { path = "test-utils" }
 [patch.crates-io]
 # jvm-bytecode 0.4.1 with one change: the interpreter yields in long loops (third_party/jvm-bytecode/README.md)
 jvm-bytecode = { path = "third_party/jvm-bytecode" }
+# rustjava-runtime 0.4.1 with one change: ISO-8859-1 and US-ASCII readers and writers (third_party/rustjava-runtime/README.md)
+rustjava-runtime = { path = "third_party/rustjava-runtime" }
 
 [package]
 name = "wie"

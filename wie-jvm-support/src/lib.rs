@@ -92,3 +92,59 @@ impl JvmSupport {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::{boxed::Box, vec::Vec};
+
+    use jvm::{Array, ClassInstanceRef, runtime::JavaLangString};
+    use test_utils::run_jvm_test;
+
+    #[test]
+    fn iso_8859_1_readers_and_writers() -> wie_util::Result<()> {
+        run_jvm_test(Box::new([]), |jvm| async move {
+            let text = "Año ¡Olé! ©";
+            let latin1: Vec<i8> = text.chars().map(|c| c as u32 as u8 as i8).collect();
+
+            let output = jvm.new_class("java/io/ByteArrayOutputStream", "()V", ()).await?;
+            let encoding = JavaLangString::from_rust_string(&jvm, "ISO-8859-1").await?;
+            let writer = jvm
+                .new_class(
+                    "java/io/OutputStreamWriter",
+                    "(Ljava/io/OutputStream;Ljava/lang/String;)V",
+                    (output.clone(), encoding.clone()),
+                )
+                .await?;
+            let value = JavaLangString::from_rust_string(&jvm, text).await?;
+            let _: () = jvm
+                .invoke_virtual(&writer, "java/io/Writer", "write", "(Ljava/lang/String;)V", (value,))
+                .await?;
+            let _: () = jvm.invoke_virtual(&writer, "java/io/Writer", "flush", "()V", ()).await?;
+            let bytes: ClassInstanceRef<Array<i8>> = jvm
+                .invoke_virtual(&output, "java/io/ByteArrayOutputStream", "toByteArray", "()[B", ())
+                .await?;
+            let length = jvm.array_length(&bytes).await?;
+            assert_eq!(jvm.load_array::<i8>(&bytes, 0, length).await?, latin1);
+
+            let input = jvm.new_class("java/io/ByteArrayInputStream", "([B)V", (bytes,)).await?;
+            let reader = jvm
+                .new_class(
+                    "java/io/InputStreamReader",
+                    "(Ljava/io/InputStream;Ljava/lang/String;)V",
+                    (input, encoding),
+                )
+                .await?;
+            let mut read = Vec::new();
+            loop {
+                let char: i32 = jvm.invoke_virtual(&reader, "java/io/Reader", "read", "()I", ()).await?;
+                if char == -1 {
+                    break;
+                }
+                read.push(char::from_u32(char as u32).unwrap());
+            }
+            assert_eq!(read.into_iter().collect::<alloc::string::String>(), text);
+
+            Ok(())
+        })
+    }
+}
