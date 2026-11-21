@@ -105,7 +105,7 @@ impl SmafPlayer {
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
 
         let data = JavaIoInputStream::read_until_end(jvm, &stream).await?;
-        // The format by its header: MIDI, WAVE, iMelody or a tone sequence; anything else is taken as SMAF.
+        // The format by its header: MIDI, WAVE, iMelody, a tone sequence or MP3; anything else is taken as SMAF.
         let system = context.system();
         let audio_handle = if data.starts_with(b"MThd") || data.starts_with(b"RIFF") {
             system.audio().load(&data).ok()
@@ -119,7 +119,8 @@ impl SmafPlayer {
             let data: Vec<i8> = data.iter().map(|byte| *byte as i8).collect();
             parse_tone_sequence(&data).map(|sequence| system.audio().load_sequence(sequence))
         } else {
-            system.audio().load_smaf(&data).ok()
+            let loaded = system.audio().load(&data).ok();
+            loaded.or_else(|| system.audio().load_smaf(&data).ok())
         };
         let Some(audio_handle) = audio_handle else {
             return Err(jvm.exception("javax/microedition/media/MediaException", "Unsupported media data").await);
@@ -368,6 +369,31 @@ mod test {
         classes::javax::microedition::media::{Control, Player},
         get_protos,
     };
+
+    #[test]
+    fn test_mp3_player() -> Result<()> {
+        run_jvm_test(Box::new([get_protos().into()]), |jvm| async move {
+            let bytes = include_bytes!("../../../../../wie-backend/src/system/audio/tone_440hz.mp3");
+            let mut data = jvm.instantiate_array("B", bytes.len()).await?;
+            jvm.store_array(&mut data, 0, bytes.iter().map(|byte| *byte as i8)).await?;
+            let stream = jvm.new_class("java/io/ByteArrayInputStream", "([B)V", (data,)).await?;
+            let content_type = JavaLangString::from_rust_string(&jvm, "audio/mpeg").await?;
+            let player: ClassInstanceRef<Player> = jvm
+                .invoke_static(
+                    "javax/microedition/media/Manager",
+                    "createPlayer",
+                    "(Ljava/io/InputStream;Ljava/lang/String;)Ljavax/microedition/media/Player;",
+                    (stream, content_type),
+                )
+                .await?;
+            // audio/mpeg is a supported type (the decoding itself is tested in wie-backend)
+            let _: () = jvm
+                .invoke_virtual(&player, "javax/microedition/media/Player", "realize", "()V", ())
+                .await?;
+
+            Ok(())
+        })
+    }
 
     #[test]
     fn test_player_controls() -> Result<()> {

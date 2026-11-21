@@ -16,6 +16,7 @@ const MIDI_TYPES: [&str; 5] = ["audio/midi", "audio/mid", "audio/x-midi", "audio
 const WAVE_TYPES: [&str; 4] = ["audio/x-wav", "audio/wav", "audio/wave", "audio/x-wave"];
 const IMELODY_TYPES: [&str; 4] = ["audio/imelody", "audio/x-imelody", "text/x-imelody", "audio/imy"];
 const TONE_SEQUENCE_TYPES: [&str; 1] = ["audio/x-tone-seq"];
+const MPEG_TYPES: [&str; 5] = ["audio/mpeg", "audio/mp3", "audio/x-mp3", "audio/mpeg3", "audio/x-mpeg"];
 const TONE_DEVICE_LOCATOR: &str = "device://tone";
 
 // class javax.microedition.media.Manager
@@ -81,16 +82,23 @@ impl Manager {
             return Err(jvm.exception("java/lang/IllegalArgumentException", "stream is null").await);
         }
         // Content types are case-insensitive and may carry parameters ("audio/X-wav", "audio/midi; rate=8000").
-        // A null type asks the player to find out the format: it tells MIDI and WAVE by their headers.
+        // A null type asks the player to find out the format: it tells MIDI, WAVE and MP3 by their headers.
         let type_string = if r#type.is_null() {
             RustString::new()
         } else {
             JavaLangString::to_rust_string(jvm, &r#type).await?
         };
         let type_string = type_string.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
-        let supported = [&SMAF_TYPES[..], &MIDI_TYPES, &WAVE_TYPES, &IMELODY_TYPES, &TONE_SEQUENCE_TYPES]
-            .iter()
-            .any(|types| types.contains(&type_string.as_str()));
+        let supported = [
+            &SMAF_TYPES[..],
+            &MIDI_TYPES,
+            &WAVE_TYPES,
+            &IMELODY_TYPES,
+            &TONE_SEQUENCE_TYPES,
+            &MPEG_TYPES,
+        ]
+        .iter()
+        .any(|types| types.contains(&type_string.as_str()));
         if type_string.is_empty() || supported {
             Ok(jvm.new_class("net/wie/SmafPlayer", "(Ljava/io/InputStream;)V", (stream,)).await?.into())
         } else {
@@ -153,7 +161,14 @@ impl Manager {
     ) -> Result<ClassInstanceRef<Array<String>>> {
         tracing::debug!("javax.microedition.media.Manager::getSupportedContentTypes({protocol:?})");
 
-        let supported = [SMAF_TYPES[0], MIDI_TYPES[0], WAVE_TYPES[0], IMELODY_TYPES[0], TONE_SEQUENCE_TYPES[0]];
+        let supported = [
+            SMAF_TYPES[0],
+            MIDI_TYPES[0],
+            WAVE_TYPES[0],
+            IMELODY_TYPES[0],
+            TONE_SEQUENCE_TYPES[0],
+            MPEG_TYPES[0],
+        ];
         let count = if protocol.is_null() { supported.len() } else { 0 };
         let mut types = jvm.instantiate_array("Ljava/lang/String;", count).await?;
         for (index, content_type) in supported.iter().take(count).enumerate() {
@@ -189,7 +204,7 @@ mod test {
                     (None,),
                 )
                 .await?;
-            assert_eq!(jvm.array_length(&content_types).await?, 5);
+            assert_eq!(jvm.array_length(&content_types).await?, 6);
             let content_type: ClassInstanceRef<String> = jvm.load_array(&content_types, 0, 1).await?.remove(0);
             assert_eq!(JavaLangString::to_rust_string(&jvm, &content_type).await?, "application/vnd.smaf");
             for protocol in ["http", "file", "", "unknown"] {
