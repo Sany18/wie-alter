@@ -45,6 +45,46 @@ pub enum TextAlignment {
     Right,
 }
 
+// How a text is drawn: the size in points (the font's baseline is that many pixels below the top of a line), bold
+// (each glyph drawn twice, one pixel apart, and one pixel wider) and underlined.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextStyle {
+    pub size: f32,
+    pub bold: bool,
+    pub underlined: bool,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            size: FONT_SIZE,
+            bold: false,
+            underlined: false,
+        }
+    }
+}
+
+impl TextStyle {
+    // The height of a line: the default size has 12-pixel lines, and the other sizes keep that proportion.
+    pub fn height(&self) -> i32 {
+        (self.size * 1.2).round() as i32
+    }
+
+    pub fn baseline(&self) -> i32 {
+        self.size.round() as i32
+    }
+
+    pub fn string_width(&self, font: &Font, string: &str) -> i32 {
+        let bold = if self.bold {
+            string.chars().filter(|c| !c.is_control()).count() as f32
+        } else {
+            0.0
+        };
+
+        (string_width(font, string, self.size) + bold) as i32
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct Color {
     pub a: u8,
@@ -83,7 +123,21 @@ pub trait Canvas: Send {
     fn copy_area(&mut self, dx: i32, dy: i32, sx: i32, sy: i32, w: u32, h: u32, clip: Clip);
     fn draw(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip);
     fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: Color, clip: Clip);
-    fn draw_text(&mut self, font: &Font, string: &str, x: i32, y: i32, text_alignment: TextAlignment, color: Color, clip: Clip);
+    fn draw_text(&mut self, font: &Font, string: &str, x: i32, y: i32, text_alignment: TextAlignment, color: Color, clip: Clip) {
+        self.draw_styled_text(font, string, x, y, text_alignment, color, clip, TextStyle::default())
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn draw_styled_text(
+        &mut self,
+        font: &Font,
+        string: &str,
+        x: i32,
+        y: i32,
+        text_alignment: TextAlignment,
+        color: Color,
+        clip: Clip,
+        style: TextStyle,
+    );
     fn draw_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color, clip: Clip);
     fn draw_arc(&mut self, x: i32, y: i32, w: u32, h: u32, start_angle: i32, arc_angle: i32, color: Color, clip: Clip);
     fn draw_round_rect(&mut self, x: i32, y: i32, w: u32, h: u32, arc_width: u32, arc_height: u32, color: Color, clip: Clip);
@@ -696,11 +750,22 @@ where
         }
     }
 
-    fn draw_text(&mut self, font: &Font, string: &str, x: i32, y: i32, text_alignment: TextAlignment, color: Color, clip: Clip) {
-        let size = FONT_SIZE;
+    fn draw_styled_text(
+        &mut self,
+        font: &Font,
+        string: &str,
+        x: i32,
+        y: i32,
+        text_alignment: TextAlignment,
+        color: Color,
+        clip: Clip,
+        style: TextStyle,
+    ) {
+        let total_width = style.string_width(font, string) as f32;
+        let size = style.size;
+        let bold = if style.bold { 1.0 } else { 0.0 };
         let font = font.0.as_scaled(font.0.pt_to_px_scale(size).unwrap());
 
-        let total_width = string.chars().map(|c| font.h_advance(font.scaled_glyph(c).id)).sum::<f32>();
         let x = match text_alignment {
             TextAlignment::Left => x,
             TextAlignment::Center => x - (total_width / 2.0) as i32,
@@ -719,25 +784,31 @@ where
             if let Some(outlined_glyph) = font.outline_glyph(glyph) {
                 outlined_glyph.draw(|glyph_x: u32, glyph_y, c| {
                     let bounds = outlined_glyph.px_bounds();
-                    let px = x + (glyph_x as f32 + bounds.min.x + position) as i32;
                     let py = y + (glyph_y as f32 + bounds.min.y + size) as i32;
-                    if px < clip.x || px >= clip.x + clip.width as i32 || py < clip.y || py >= clip.y + clip.height as i32 {
-                        return;
+                    for dx in 0..=bold as i32 {
+                        let px = x + dx + (glyph_x as f32 + bounds.min.x + position) as i32;
+                        if px < clip.x || px >= clip.x + clip.width as i32 || py < clip.y || py >= clip.y + clip.height as i32 {
+                            continue;
+                        }
+                        self.blend_pixel(
+                            px,
+                            py,
+                            Color {
+                                a: (c * 255.0) as u8,
+                                r: color.r,
+                                g: color.g,
+                                b: color.b,
+                            },
+                        )
                     }
-                    self.blend_pixel(
-                        px,
-                        py,
-                        Color {
-                            a: (c * 255.0) as u8,
-                            r: color.r,
-                            g: color.g,
-                            b: color.b,
-                        },
-                    )
                 });
             }
 
-            position += h_advance;
+            position += h_advance + bold;
+        }
+
+        if style.underlined && total_width >= 1.0 {
+            self.fill_rect(x, y + style.baseline() + 1, total_width as u32, 1, color, clip);
         }
     }
 
