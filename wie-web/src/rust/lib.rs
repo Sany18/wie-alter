@@ -13,6 +13,8 @@ mod window;
 
 use alloc::{
     boxed::Box,
+    collections::BTreeMap,
+    format,
     string::{String, ToString},
     sync::Arc,
     vec::Vec,
@@ -23,6 +25,7 @@ use core::{
 };
 
 use hashbrown::HashMap;
+use serde::Deserialize;
 use tracing_subscriber::{Layer, filter::LevelFilter, fmt::time::UtcTime, layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_web::MakeConsoleWriter;
 use wasm_bindgen::{JsError, prelude::*};
@@ -196,6 +199,14 @@ pub fn app_platform(filename: &str, buf: &[u8]) -> Result<String, JsError> {
     Ok(file_type.name().into())
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct J2meOptions {
+    jad: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    system_properties: BTreeMap<String, String>,
+}
+
 #[wasm_bindgen]
 impl WieWeb {
     #[wasm_bindgen(constructor)]
@@ -206,6 +217,7 @@ impl WieWeb {
         font_data: Vec<u8>,
         audio_player: AudioPlayer,
         host: Option<WasmHost>,
+        j2me: Option<String>,
     ) -> Result<WieWeb, JsError> {
         (|| {
             let should_redraw = Arc::new(AtomicBool::new(true));
@@ -219,7 +231,23 @@ impl WieWeb {
                 profile: None,
             };
 
-            let emulator = wie::load_emulator(filename, buf.to_vec(), platform, options)?;
+            // A J2ME app's descriptor attributes and system properties from the embedding page, as JSON:
+            // {"jad": {"Name": "value"}, "systemProperties": {"name": "value"}}, both optional.
+            let emulator = if let Some(j2me) = j2me {
+                let j2me: J2meOptions = serde_json::from_str(&j2me)?;
+                let jad = j2me
+                    .jad
+                    .map(|attributes| attributes.iter().map(|(name, value)| format!("{name}: {value}\n")).collect::<String>());
+                wie::load_j2me_emulator(
+                    filename,
+                    buf.to_vec(),
+                    jad.as_deref().map(str::as_bytes),
+                    j2me.system_properties,
+                    platform,
+                )?
+            } else {
+                wie::load_emulator(filename, buf.to_vec(), platform, options)?
+            };
 
             anyhow::Ok(Self {
                 emulator,

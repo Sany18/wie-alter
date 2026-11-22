@@ -539,6 +539,7 @@ fn write_result(out: &Path, shared: &SharedRef, extra: Value) -> anyhow::Result<
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let (mut jar, mut size, mut out, mut script, mut turbo) = (None, (240u32, 320u32), None, String::from("w5000 send"), false);
+    let (mut jad, mut properties) = (None, BTreeMap::new());
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--size" => {
@@ -549,11 +550,19 @@ fn main() -> anyhow::Result<()> {
             "--out" => out = args.next().map(PathBuf::from),
             "--script" => script = args.next().unwrap_or_default(),
             "--turbo" => turbo = true,
+            "--jad" => jad = Some(fs::read(args.next().unwrap_or_default())?),
+            "--property" => {
+                let v = args.next().unwrap_or_default();
+                let (key, value) = v.split_once('=').ok_or_else(|| anyhow::anyhow!("--property KEY=VALUE"))?;
+                properties.insert(key.to_string(), value.to_string());
+            }
             _ if jar.is_none() => jar = Some(arg),
             _ => anyhow::bail!("unexpected argument {arg}"),
         }
     }
-    let jar = jar.ok_or_else(|| anyhow::anyhow!("usage: wie-headless <app.jar> --size WxH --out <dir> [--script ...] [--turbo]"))?;
+    let jar = jar.ok_or_else(|| {
+        anyhow::anyhow!("usage: wie-headless <app.jar> --size WxH --out <dir> [--script ...] [--turbo] [--jad <app.jad>] [--property KEY=VALUE]...")
+    })?;
     let out = out.ok_or_else(|| anyhow::anyhow!("--out <dir> is required"))?;
     fs::create_dir_all(&out)?;
     let steps = parse_script(&script)?;
@@ -623,7 +632,14 @@ fn main() -> anyhow::Result<()> {
         aot: None,
         profile: None,
     };
-    let emulator = match panic::catch_unwind(AssertUnwindSafe(|| wie::load_emulator(&filename, bytes, platform, options))) {
+    let load = || {
+        if jad.is_some() || !properties.is_empty() {
+            wie::load_j2me_emulator(&filename, bytes, jad.as_deref(), properties, platform)
+        } else {
+            wie::load_emulator(&filename, bytes, platform, options)
+        }
+    };
+    let emulator = match panic::catch_unwind(AssertUnwindSafe(load)) {
         Ok(Ok(emulator)) => emulator,
         Ok(Err(error)) => {
             write_result(&out, &shared, json!({"hang": false, "exited": false, "load_error": format!("{error:#}")}))?;

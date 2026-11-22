@@ -78,25 +78,48 @@ impl J2MEEmulator {
     }
 
     pub fn from_jad_jar(platform: Box<dyn Platform>, jad: Vec<u8>, jar_filename: String, jar: Vec<u8>) -> Result<Self> {
-        let descriptor = J2MEDescriptor::parse(&jad);
-
-        let files = [(jar_filename.to_owned(), jar)].into_iter().collect();
-        Self::load(platform, &jar_filename, descriptor, &files)
+        Self::from_jar_with_descriptor(platform, &jar_filename, jar, Some(&jad), BTreeMap::new())
     }
 
     pub fn from_jar(platform: Box<dyn Platform>, jar_filename: &str, jar: Vec<u8>) -> Result<Self> {
-        let contents = extract_zip(&jar)?;
-        let (_, manifest) = contents
-            .iter()
-            .find(|(path, _)| path.eq_ignore_ascii_case("META-INF/MANIFEST.MF"))
-            .ok_or_else(|| WieError::FatalError("JAR manifest not found".into()))?;
-        let descriptor = J2MEDescriptor::parse(manifest);
-        let files = [(jar_filename.to_owned(), jar)].into_iter().collect();
-
-        Self::load(platform, jar_filename, descriptor, &files)
+        Self::from_jar_with_descriptor(platform, jar_filename, jar, None, BTreeMap::new())
     }
 
-    fn load(platform: Box<dyn Platform>, jar_filename: &str, descriptor: J2MEDescriptor, files: &BTreeMap<String, Vec<u8>>) -> Result<Self> {
+    // The application descriptor (JAD), when there is one, lies over the jar's manifest: an attribute in both takes the
+    // descriptor's value, as in MIDP 1.0. The system properties the host gives override the platform's defaults.
+    pub fn from_jar_with_descriptor(
+        platform: Box<dyn Platform>,
+        jar_filename: &str,
+        jar: Vec<u8>,
+        jad: Option<&[u8]>,
+        system_properties: BTreeMap<String, String>,
+    ) -> Result<Self> {
+        let contents = extract_zip(&jar)?;
+        let manifest = contents
+            .iter()
+            .find(|(path, _)| path.eq_ignore_ascii_case("META-INF/MANIFEST.MF"))
+            .map(|(_, manifest)| J2MEDescriptor::parse(manifest).properties);
+        let mut properties = match (manifest, jad) {
+            (Some(manifest), _) => manifest,
+            (None, Some(_)) => BTreeMap::new(),
+            (None, None) => return Err(WieError::FatalError("JAR manifest not found".into())),
+        };
+        if let Some(jad) = jad {
+            properties.extend(J2MEDescriptor::parse(jad).properties);
+        }
+        let descriptor = J2MEDescriptor::from_properties(properties);
+        let files = [(jar_filename.to_owned(), jar)].into_iter().collect();
+
+        Self::load(platform, jar_filename, descriptor, &files, system_properties)
+    }
+
+    fn load(
+        platform: Box<dyn Platform>,
+        jar_filename: &str,
+        descriptor: J2MEDescriptor,
+        files: &BTreeMap<String, Vec<u8>>,
+        system_properties: BTreeMap<String, String>,
+    ) -> Result<Self> {
         if descriptor.name.is_empty() || descriptor.main_class_name.is_empty() {
             return Err(WieError::FatalError("MIDlet-1 name or main class not found".into()));
         }
@@ -133,6 +156,7 @@ impl J2MEEmulator {
                 &mut system_clone,
                 jar_filename,
                 descriptor.properties,
+                system_properties,
                 descriptor.main_class_name,
                 replaced,
             )
@@ -147,6 +171,7 @@ impl J2MEEmulator {
         system: &mut System,
         jar_filename: String,
         properties: BTreeMap<String, String>,
+        system_properties: BTreeMap<String, String>,
         main_class_name: String,
         replaced: Vec<String>,
     ) -> Result<()> {
@@ -156,10 +181,15 @@ impl J2MEEmulator {
             .collect::<Vec<_>>();
         // The key codes of most MIDP phones outside Korea (Nokia's, -1 to -7 for the arrows, select and soft keys), and
         // CLDC's default encoding: one char per byte, as the games outside Korea expect from new String(bytes) and getBytes().
-        let properties = [("microedition.platform", "wie"), ("wie.keyCodes", "nokia"), ("file.encoding", "ISO-8859-1")]
-            .into_iter()
-            .chain(properties.iter().map(|(k, v)| (k.as_ref(), v.as_ref())))
-            .collect::<Vec<_>>();
+        let properties = [
+            ("microedition.platform", "wie"),
+            ("wie.keyCodes", "nokia"),
+            ("file.encoding", "ISO-8859-1"),
+        ]
+        .into_iter()
+        .chain(system_properties.iter().map(|(k, v)| (k.as_ref(), v.as_ref())))
+        .chain(properties.iter().map(|(k, v)| (k.as_ref(), v.as_ref())))
+        .collect::<Vec<_>>();
 
         let vendor = wie_midp_vendor::get_protos()
             .into_iter()
@@ -297,7 +327,7 @@ impl J2MEDescriptor {
 mod tests {
     extern crate std;
 
-    use alloc::{boxed::Box, string::ToString, vec::Vec};
+    use alloc::{boxed::Box, collections::BTreeMap, string::ToString, vec::Vec};
     use std::io::{Cursor, Write};
 
     use test_utils::TestPlatform;
@@ -326,6 +356,38 @@ mod tests {
                 assert_eq!(emulator.system.aid(), "App title");
             }
         }
+    }
+
+    #[test]
+    fn jad_attributes_lie_over_the_manifest() {
+        let jar = |manifest: Option<&[u8]>| {
+            let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+            if let Some(manifest) = manifest {
+                writer.start_file("META-INF/MANIFEST.MF", SimpleFileOptions::default()).unwrap();
+                writer.write_all(manifest).unwrap();
+            }
+            writer.start_file("example/Main.class", SimpleFileOptions::default()).unwrap();
+            writer.finish().unwrap().into_inner()
+        };
+        let with_manifest = jar(Some(b"MIDlet-Name: Suite\nMIDlet-1: Manifest title, , example.Main\n"));
+        let jad: &[u8] = b"MIDlet-1: Descriptor title, , example.Main\nGame-Levels: 9\n";
+
+        let emulator = J2MEEmulator::from_jar_with_descriptor(
+            Box::new(TestPlatform::new()),
+            "app.jar",
+            with_manifest.clone(),
+            Some(jad),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(emulator.system.pid(), "Descriptor title");
+        let emulator =
+            J2MEEmulator::from_jar_with_descriptor(Box::new(TestPlatform::new()), "app.jar", with_manifest, None, BTreeMap::new()).unwrap();
+        assert_eq!(emulator.system.pid(), "Manifest title");
+        let emulator =
+            J2MEEmulator::from_jar_with_descriptor(Box::new(TestPlatform::new()), "app.jar", jar(None), Some(jad), BTreeMap::new()).unwrap();
+        assert_eq!(emulator.system.pid(), "Descriptor title");
+        assert!(J2MEEmulator::from_jar_with_descriptor(Box::new(TestPlatform::new()), "app.jar", jar(None), None, BTreeMap::new()).is_err());
     }
 
     #[test]

@@ -7,6 +7,10 @@ export interface PlayerOptions {
   /** Archive file name; its extension selects the platform (".jar" for J2ME). */
   filename: string;
   archive: Uint8Array;
+  /** J2ME: application descriptor (JAD) attributes, over the jar manifest's; MIDlet.getAppProperty reads them. */
+  jad?: Record<string, string>;
+  /** J2ME: system properties, e.g. `wie.keyCodes` ("nokia" or "motorola"). */
+  systemProperties?: Record<string, string>;
   /** The app finished preparing and shows its first screen. */
   onReady?: () => void;
   /** The app exited by itself (MIDlet.notifyDestroyed). */
@@ -43,7 +47,11 @@ export async function start(options: PlayerOptions): Promise<PlayerSession> {
   const audio = new AudioPlayer();
   let emulator: InstanceType<typeof WieWeb>;
   try {
-    emulator = new WieWeb(options.filename, options.archive, options.canvas, font, audio, undefined);
+    const j2me =
+      options.jad || options.systemProperties
+        ? JSON.stringify({ jad: options.jad, systemProperties: options.systemProperties })
+        : undefined;
+    emulator = new WieWeb(options.filename, options.archive, options.canvas, font, audio, undefined, j2me);
   } catch (error) {
     audio.dispose();
     throw error;

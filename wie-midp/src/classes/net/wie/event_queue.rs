@@ -112,15 +112,24 @@ pub fn from_nokia_key_code(code: i32) -> i32 {
         .unwrap_or(code)
 }
 
-// Motorola's key codes for the arrows and select: (MIDP code, Motorola code). A game built for Motorola and converted
-// for other phones may translate the key codes it gets back to these and pass them on to getGameAction.
-const MOTOROLA_KEY_CODES: [(i32, i32); 5] = [
+// Motorola's key codes: (MIDP code, Motorola code). A game built for Motorola compares against these; one converted for
+// other phones may translate the key codes it gets back to them and pass them on to getGameAction.
+const MOTOROLA_KEY_CODES: [(i32, i32); 7] = [
     (MIDPKeyCode::UP as i32, 1),
     (MIDPKeyCode::DOWN as i32, 6),
     (MIDPKeyCode::LEFT as i32, 2),
     (MIDPKeyCode::RIGHT as i32, 5),
     (MIDPKeyCode::FIRE as i32, 20),
+    (MIDPKeyCode::LEFT_SOFT_KEY as i32, 21),
+    (MIDPKeyCode::RIGHT_SOFT_KEY as i32, 22),
 ];
+
+pub fn to_motorola_key_code(code: i32) -> i32 {
+    MOTOROLA_KEY_CODES
+        .iter()
+        .find_map(|(midp, motorola)| (*midp == code).then_some(*motorola))
+        .unwrap_or(code)
+}
 
 pub fn from_motorola_key_code(code: i32) -> i32 {
     MOTOROLA_KEY_CODES

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use wie_backend::{Emulator, Options, Platform, extract_zip};
 use wie_j2me::J2MEEmulator;
 use wie_ktf::KtfEmulator;
@@ -116,4 +118,22 @@ pub fn load_emulator(filename: &str, bytes: Vec<u8>, platform: Box<dyn Platform>
         }
         FileType::J2me => Box::new(J2MEEmulator::from_jar(platform, filename, bytes)?),
     })
+}
+
+// A J2ME app with its application descriptor (JAD) and the system properties the host sets for it.
+pub fn load_j2me_emulator(
+    filename: &str,
+    jar: Vec<u8>,
+    jad: Option<&[u8]>,
+    system_properties: BTreeMap<String, String>,
+    platform: Box<dyn Platform>,
+) -> anyhow::Result<Box<dyn Emulator>> {
+    let filename = filename.rsplit(['/', '\\']).next().unwrap();
+    Ok(Box::new(J2MEEmulator::from_jar_with_descriptor(
+        platform,
+        filename,
+        jar,
+        jad,
+        system_properties,
+    )?))
 }
