@@ -147,6 +147,7 @@ impl Graphics {
                 JavaFieldProto::new("translateY", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("color", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("xorMode", "Z", FieldAccessFlags::PRIVATE),
+                JavaFieldProto::new("strokeStyle", "I", FieldAccessFlags::PRIVATE),
                 JavaFieldProto::new("font", "Ljavax/microedition/lcdui/Font;", FieldAccessFlags::PRIVATE),
             ]
             .into_iter()
@@ -218,6 +219,8 @@ impl Graphics {
             .await?;
         jvm.put_field(&mut this, "javax/microedition/lcdui/Graphics", "color", "I", 0).await?;
         jvm.put_field(&mut this, "javax/microedition/lcdui/Graphics", "xorMode", "Z", false)
+            .await?;
+        jvm.put_field(&mut this, "javax/microedition/lcdui/Graphics", "strokeStyle", "I", 0)
             .await?;
         let font: ClassInstanceRef<Font> = jvm
             .invoke_static("javax/microedition/lcdui/Font", "getDefaultFont", "()Ljavax/microedition/lcdui/Font;", ())
@@ -1012,16 +1015,25 @@ impl Graphics {
         Ok(color & 0xffffff)
     }
 
-    async fn set_stroke_style(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, style: i32) -> JvmResult<()> {
-        tracing::warn!("stub javax.microedition.lcdui.Graphics::setStrokeStyle({this:?}, {style})");
+    async fn set_stroke_style(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, style: i32) -> JvmResult<()> {
+        // DOTTED is kept, but lines are still drawn solid
+        if style == 1 {
+            tracing::warn!("stub javax.microedition.lcdui.Graphics::setStrokeStyle({this:?}, {style})");
+        } else {
+            tracing::debug!("javax.microedition.lcdui.Graphics::setStrokeStyle({this:?}, {style})");
+        }
 
-        Ok(())
+        if style != 0 && style != 1 {
+            return Err(jvm.exception("java/lang/IllegalArgumentException", "invalid stroke style").await);
+        }
+        jvm.put_field(&mut this, "javax/microedition/lcdui/Graphics", "strokeStyle", "I", style)
+            .await
     }
 
-    async fn get_stroke_style(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
-        tracing::warn!("stub javax.microedition.lcdui.Graphics::getStrokeStyle({this:?})");
+    async fn get_stroke_style(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
+        tracing::debug!("javax.microedition.lcdui.Graphics::getStrokeStyle({this:?})");
 
-        Ok(0) // SOLID
+        jvm.get_field(&this, "javax/microedition/lcdui/Graphics", "strokeStyle", "I").await
     }
 
     async fn copy_area(

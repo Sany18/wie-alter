@@ -6,7 +6,7 @@ mod tone_sequence;
 
 use wie_jvm_support::WieJavaClassProto;
 
-pub fn get_protos() -> [WieJavaClassProto; 58] {
+pub fn get_protos() -> [WieJavaClassProto; 59] {
     [
         classes::javax::microedition::io::Connection::as_proto(),
         classes::javax::microedition::io::ConnectionNotFoundException::as_proto(),
@@ -38,6 +38,7 @@ pub fn get_protos() -> [WieJavaClassProto; 58] {
         classes::javax::microedition::lcdui::game::GameCanvas::as_proto(),
         classes::javax::microedition::lcdui::game::Layer::as_proto(),
         classes::javax::microedition::lcdui::game::LayerManager::as_proto(),
+        classes::javax::microedition::lcdui::game::Sprite::as_proto(),
         classes::javax::microedition::lcdui::game::TiledLayer::as_proto(),
         classes::javax::microedition::media::Control::as_proto(),
         classes::javax::microedition::media::Controllable::as_proto(),

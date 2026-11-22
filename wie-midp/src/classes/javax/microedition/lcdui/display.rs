@@ -861,29 +861,31 @@ impl Display {
     }
 
     async fn is_color(_jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<bool> {
-        tracing::warn!("stub javax.microedition.lcdui.Display::isColor({this:?})");
+        tracing::debug!("javax.microedition.lcdui.Display::isColor({this:?})");
 
+        // the screen is 24 bit color with 8 bit alpha
         Ok(true)
     }
 
     async fn flash_backlight(jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>, duration: i32) -> JvmResult<bool> {
-        tracing::warn!("stub javax.microedition.lcdui.Display::flashBacklight({this:?}, {duration})");
+        tracing::debug!("javax.microedition.lcdui.Display::flashBacklight({this:?}, {duration})");
 
         if duration < 0 {
             return Err(jvm.exception("java/lang/IllegalArgumentException", "duration is negative").await);
         }
 
+        // the host screen has no backlight to flash
         Ok(false)
     }
 
     async fn num_alpha_levels(_jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
-        tracing::warn!("stub javax.microedition.lcdui.Display::numAlphaLevels({this:?})");
+        tracing::debug!("javax.microedition.lcdui.Display::numAlphaLevels({this:?})");
 
         Ok(256)
     }
 
     async fn num_colors(_jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
-        tracing::warn!("stub javax.microedition.lcdui.Display::numColors({this:?})");
+        tracing::debug!("javax.microedition.lcdui.Display::numColors({this:?})");
 
         Ok(1 << 24)
     }
