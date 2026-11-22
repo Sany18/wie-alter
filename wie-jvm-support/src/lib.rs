@@ -147,4 +147,20 @@ mod tests {
             Ok(())
         })
     }
+
+    #[test]
+    fn string_value_of_object() -> wie_util::Result<()> {
+        run_jvm_test(Box::new([]), |jvm| async move {
+            let descriptor = "(Ljava/lang/Object;)Ljava/lang/String;";
+            let object = jvm.new_class("java/lang/Integer", "(I)V", (42,)).await?;
+            let value = jvm.invoke_static("java/lang/String", "valueOf", descriptor, (object,)).await?;
+            assert_eq!(JavaLangString::to_rust_string(&jvm, &value).await?, "42");
+
+            let null = ClassInstanceRef::<Array<i8>>::new(None);
+            let value = jvm.invoke_static("java/lang/String", "valueOf", descriptor, (null,)).await?;
+            assert_eq!(JavaLangString::to_rust_string(&jvm, &value).await?, "null");
+
+            Ok(())
+        })
+    }
 }
