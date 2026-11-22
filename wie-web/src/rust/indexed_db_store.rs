@@ -16,6 +16,9 @@ extern "C" {
     async fn get_all_keys(this: &IndexedDBStore) -> js_sys::Array;
 
     #[wasm_bindgen(method)]
+    async fn get_all_entries(this: &IndexedDBStore) -> js_sys::Array;
+
+    #[wasm_bindgen(method)]
     async fn get(this: &IndexedDBStore, key: &JsValue) -> JsValue;
 
     #[wasm_bindgen(method)]
@@ -39,6 +42,17 @@ pub enum StoreKey {
 }
 
 impl StoreKey {
+    fn from_js_value(key: &JsValue) -> Option<Self> {
+        if let Some(key) = key.as_string() {
+            Some(Self::String(key))
+        } else if Array::is_array(key) {
+            let pair = Array::from(key);
+            Some(Self::Pair(pair.get(0).as_string()?, pair.get(1).as_string()?))
+        } else {
+            None
+        }
+    }
+
     fn into_js_value(self) -> JsValue {
         match self {
             Self::String(value) => JsValue::from_str(&value),
@@ -63,20 +77,19 @@ impl Store {
 
     pub async fn get_all_keys(&self) -> Vec<StoreKey> {
         let js: IndexedDBStore = self.js.clone().into();
+        run_js_future(async move { js.get_all_keys().await.iter().filter_map(|key| StoreKey::from_js_value(&key)).collect() }).await
+    }
+
+    /// Every key with its value, in one request.
+    pub async fn get_all_entries(&self) -> Vec<(StoreKey, Vec<u8>)> {
+        let js: IndexedDBStore = self.js.clone().into();
         run_js_future(async move {
-            js.get_all_keys()
-                .await
+            let entries = js.get_all_entries().await;
+            let values = Array::from(&entries.get(1));
+            Array::from(&entries.get(0))
                 .iter()
-                .filter_map(|key| {
-                    if let Some(key) = key.as_string() {
-                        Some(StoreKey::String(key))
-                    } else if Array::is_array(&key) {
-                        let pair = Array::from(&key);
-                        Some(StoreKey::Pair(pair.get(0).as_string()?, pair.get(1).as_string()?))
-                    } else {
-                        None
-                    }
-                })
+                .zip(values.iter())
+                .filter_map(|(key, value)| Some((StoreKey::from_js_value(&key)?, Uint8Array::from(value).to_vec())))
                 .collect()
         })
         .await

@@ -44,6 +44,23 @@ export class IndexedDBStore {
     });
   }
 
+  public get_all_entries(): Promise<[IDBValidKey[], Uint8Array[]]> {
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(this.store_name, "readonly");
+      const store = transaction.objectStore(this.store_name);
+      const keys = store.getAllKeys();
+      const values = store.getAll();
+
+      transaction.oncomplete = () => {
+        resolve([keys.result, values.result as Uint8Array[]]);
+      };
+
+      transaction.onerror = () => {
+        reject(transaction.error);
+      };
+    });
+  }
+
   public get(key: IDBValidKey): Promise<Uint8Array | undefined> {
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction(this.store_name, "readonly");
