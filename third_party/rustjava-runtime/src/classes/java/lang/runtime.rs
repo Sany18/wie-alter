@@ -6,6 +6,10 @@ use jvm_types::{ClassAccessFlags, MethodAccessFlags};
 
 use crate::{RuntimeClassProto, RuntimeContext};
 
+/// The heap a game sees. The host heap grows as needed, so the whole of a typical phone heap is reported free; games
+/// use these numbers to pick how much to cache.
+const HEAP_SIZE: i64 = 0x100000;
+
 // class java.lang.Runtime
 pub struct Runtime;
 
@@ -38,8 +42,10 @@ impl Runtime {
         }
     }
 
-    async fn init(_: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Runtime>) -> Result<()> {
-        tracing::warn!("stub java.lang.Runtime::<init>({this:?})");
+    async fn init(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Runtime>) -> Result<()> {
+        tracing::debug!("java.lang.Runtime::<init>({this:?})");
+
+        let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
 
         Ok(())
     }
@@ -53,15 +59,15 @@ impl Runtime {
     }
 
     async fn total_memory(_: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Runtime>) -> Result<i64> {
-        tracing::warn!("stub java.lang.Runtime::totalMemory({this:?})");
+        tracing::debug!("java.lang.Runtime::totalMemory({this:?})");
 
-        Ok(0x100000) // TODO: hardcoded
+        Ok(HEAP_SIZE)
     }
 
     async fn free_memory(_: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Runtime>) -> Result<i64> {
-        tracing::warn!("stub java.lang.Runtime::freeMemory({this:?})");
+        tracing::debug!("java.lang.Runtime::freeMemory({this:?})");
 
-        Ok(0x100000) // TODO: hardcoded
+        Ok(HEAP_SIZE)
     }
 
     async fn gc(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Runtime>) -> Result<()> {
