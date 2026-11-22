@@ -47,13 +47,17 @@ impl DeviceControl {
     }
 
     async fn set_lights(_: &Jvm, _: &mut WieJvmContext, num: i32, level: i32) -> JvmResult<()> {
-        tracing::warn!("stub com.nokia.mid.ui.DeviceControl::setLights({num}, {level})");
+        tracing::debug!("com.nokia.mid.ui.DeviceControl::setLights({num}, {level})");
+
+        // the host screen has no backlight to control
 
         Ok(())
     }
 
     async fn flash_lights(_: &Jvm, _: &mut WieJvmContext, duration: i64) -> JvmResult<()> {
-        tracing::warn!("stub com.nokia.mid.ui.DeviceControl::flashLights({duration})");
+        tracing::debug!("com.nokia.mid.ui.DeviceControl::flashLights({duration})");
+
+        // the host screen has no backlight to flash
 
         Ok(())
     }

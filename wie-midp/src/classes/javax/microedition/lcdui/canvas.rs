@@ -248,8 +248,9 @@ impl Canvas {
     }
 
     async fn is_double_buffered(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<bool> {
-        tracing::warn!("stub javax.microedition.lcdui.Canvas::isDoubleBuffered({this:?})");
+        tracing::debug!("javax.microedition.lcdui.Canvas::isDoubleBuffered({this:?})");
 
+        // a paint is drawn off screen and shown once it is done
         Ok(true)
     }
 
